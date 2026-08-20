@@ -1,0 +1,56 @@
+{
+  "name": "doi-chieu-du-lieu",
+  "version": "1.0.1",
+  "description": "Ứng dụng đối chiếu dữ liệu mua hàng, quét mã và nhập kho",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pokemon1742000-commits/PU.git"
+  },
+  "main": "main.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test",
+    "check": "node --check main.js && node --check preload.js && node --check src/processor.js && node --check src/file-worker.js && node --check src/exporter.js && node --check renderer/app.js",
+    "dist": "electron-builder --win portable",
+    "publish": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish.ps1",
+    "release:auto": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-auto.ps1"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9",
+    "exceljs": "^4.4.0",
+    "fuzzball": "^2.2.3"
+  },
+  "devDependencies": {
+    "electron": "^37.2.6",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "vn.doichieu.desktop",
+    "productName": "Đối Chiếu Dữ Liệu",
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "renderer/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "portable"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "Doi-Chieu-Setup-${version}.${ext}"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "pokemon1742000-commits",
+      "repo": "PU",
+      "releaseType": "release"
+    }
+  },
+  "allowScripts": {}
+}

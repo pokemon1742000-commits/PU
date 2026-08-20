@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Đối Chiếu Dữ Liệu Mua Hàng</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="preview.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="app-header-text"><h1 id="pageTitle">Đối Chiếu Dữ Liệu Mua Hàng</h1><p>Nạp dữ liệu, kiểm tra, tự động so sánh và xuất báo cáo Excel.</p></div>
+    <div class="header-actions">
+      <div class="search-box"><svg viewBox="0 0 20 20" fill="none"><circle cx="9" cy="9" r="6" stroke="currentColor" stroke-width="1.6"/><path d="M17 17L13.5 13.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><input id="tableSearch" type="search" placeholder="Tìm mã dự án, mã hàng, tên hàng..."></div>
+      <button id="infoBtn" class="button info-button" type="button" title="Thông tin ứng dụng" aria-label="Thông tin ứng dụng"><span>i</span></button>
+      <button id="updateBtn" class="button update-button" type="button" title="Tải và cài đặt bản mới từ GitHub"><span>Update</span></button>
+      <button id="exportBtn" class="button button-primary"><svg viewBox="0 0 20 20" fill="none"><path d="M10 3v10M10 13l-3.5-3.5M10 13l3.5-3.5M4 15v1a2 2 0 002 2h8a2 2 0 002-2v-1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Xuất Excel</span></button>
+    </div>
+  </header>
+
+  <div class="app-shell">
+    <aside class="sidebar">
+      <section class="side-card action-card">
+        <button class="button action-button load" data-kind="purchase"><span>▦</span><span>Dữ Liệu Mua Hàng</span></button>
+        <button class="button action-button load" data-kind="scan"><span>⌁</span><span>Dữ Liệu Quét Mã</span></button>
+        <button class="button action-button load" data-kind="warehouse"><span>◇</span><span>Dữ Liệu Nhập Kho</span></button>
+        <button class="button action-button load" data-kind="reference"><span>✓</span><span>Danh sách Job Code</span></button>
+        <button class="button action-button button-soft nav sidebar-page-link" data-view="replacements"><span>⇄</span><span>Đổi mã duyệt PR</span></button>
+        <button id="clearSession" class="button action-button button-soft"><span>♲</span><span>Clear dữ liệu phiên</span></button>
+      </section>
+      <div class="sidebar-threshold"><div class="threshold-setting"><label for="threshold">Tự ghép <strong id="thresholdValue">95%</strong></label><input id="threshold" type="range" min="1" max="100" value="95"></div><div class="threshold-setting"><label for="confirmationThreshold">Cần xác nhận từ <strong id="confirmationThresholdValue">70%</strong></label><input id="confirmationThreshold" type="range" min="0" max="99" value="70"></div><p>Dưới ngưỡng xác nhận sẽ được xem là các mã khác nhau.</p></div>
+      <button class="button action-button button-soft nav sidebar-job-code" data-view="data" data-open-table="jobCodes"><span>✓</span><span>Xem Job Code</span></button>
+      <div class="theme-dots" aria-label="Chọn theme"><button class="theme-dot dot-sunrise active" data-theme="default" title="Bình minh"></button><button class="theme-dot dot-mint" data-theme="mint" title="Bạc hà"></button><button class="theme-dot dot-sky" data-theme="sky" title="Bầu trời"></button><button class="theme-dot dot-lavender" data-theme="lavender" title="Oải hương"></button></div>
+    </aside>
+
+    <main class="content">
+      <nav class="tabbar"><div class="tab-items"><span class="nav-indicator" aria-hidden="true"></span>
+        <button class="nav nav-item active" data-view="dashboard">Bảng thống kê</button><button class="nav nav-item" data-view="data" data-open-table="purchase">Mua Hàng</button><button class="nav nav-item" data-view="data" data-open-table="scan">Quét Mã</button><button class="nav nav-item" data-view="data" data-open-table="warehouse">Nhập Kho</button><button class="nav nav-item" data-view="data" data-open-table="comparison">Xác Nhận <b id="reviewBadge">0</b></button><button class="nav nav-item" data-view="data" data-open-table="enough">Đủ Hàng</button><button class="nav nav-item" data-view="data" data-open-table="shortage">Thiếu</button><button class="nav nav-item" data-view="data" data-open-table="excess">Thừa</button>
+      </div></nav>
+
+      <section id="dashboard" class="view active">
+        <div class="stats-grid">
+          <button class="stat-card" data-table="purchase"><div class="stat-icon">▦</div><span>Mua Hàng</span><strong id="dashPurchase">0</strong></button><button class="stat-card" data-table="scan"><div class="stat-icon">⌁</div><span>Quét Mã</span><strong id="dashScan">0</strong></button><button class="stat-card ok" data-table="enough"><div class="stat-icon">✓</div><span>Đủ hàng</span><strong id="enoughCount">0</strong></button><button class="stat-card missing" data-table="shortage"><div class="stat-icon">!</div><span>Thiếu hàng</span><strong id="shortageCount">0</strong></button><button class="stat-card extra" data-table="excess"><div class="stat-icon">↗</div><span>Thừa hàng</span><strong id="excessCount">0</strong></button><button class="stat-card pending" data-table="comparison"><div class="stat-icon">◷</div><span>Cần xác nhận</span><strong id="dashReview">0</strong></button>
+        </div>
+        <div class="empty-state"><svg viewBox="0 0 48 48" fill="none"><rect x="8" y="14" width="32" height="26" rx="3" stroke="currentColor" stroke-width="2"/><path d="M8 20h32M16 14v-3a2 2 0 012-2h12a2 2 0 012 2v3" stroke="currentColor" stroke-width="2"/></svg><h2>Quy trình xử lý</h2><p>Nạp các nguồn dữ liệu ở thanh bên, kiểm tra từng bảng rồi chạy đối chiếu.</p></div>
+      </section>
+
+      <section id="data" class="view"><div class="view-header table-view-header"><div><h2 id="tableTitle">Dữ liệu</h2><p>Mỗi trang hiển thị 100 dòng để thao tác nhanh; toàn bộ dữ liệu vẫn dùng khi đối chiếu và xuất Excel.</p></div></div><div class="discrepancy-block"><div class="table-toolbar"><nav id="paginationTop" class="pagination" aria-label="Phân trang"></nav><div id="tableSideActions" class="table-side-actions" hidden><button id="warningShortcut" class="warning-shortcut" type="button">⚠ Cảnh Báo</button><button id="rawToggle" class="raw-toggle" type="button" aria-pressed="false" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.8"/></svg><span>Xem trước khi gộp</span></button></div></div><div class="table-wrap"><table><thead id="tableHead"></thead><tbody id="tableBody"></tbody></table></div></div></section>
+      <section id="replacements" class="view"><div class="view-header"><h2>Đổi mã đã duyệt PR</h2><p>Quản lý các mã hàng cũ được thay thế bằng mã mới theo từng dự án.</p></div><section id="codeReplacementPanel" class="code-replacement-panel"><form id="codeReplacementForm"><label><span>Mã dự án</span><input id="replacementProject" placeholder="Ví dụ: MEC2205011" required></label><label><span>Mã hàng cũ</span><input id="replacementOldCode" placeholder="Mã đã hủy hoặc hết hàng" required></label><span class="replacement-arrow">→</span><label><span>Mã hàng mới</span><input id="replacementNewCode" placeholder="Mã thay thế đã tạo PR" required></label><button class="button button-primary" type="submit">Lưu đổi mã</button></form><small>Mã cũ và mã mới phải cùng tồn tại trong báo cáo Mua Hàng của dự án. Khi đối chiếu chỉ tính PR mã mới.</small><nav id="replacementPagination" class="pagination replacement-pagination" aria-label="Phân trang danh sách đổi mã"></nav><div class="replacement-table-wrap"><table class="replacement-table"><thead><tr><th>STT</th><th>Mã dự án</th><th>Mã hàng cũ</th><th></th><th>Mã hàng mới</th><th>Thao tác</th></tr></thead><tbody id="codeReplacementList"></tbody></table></div></section></section>
+      <section id="export" class="view"><div class="view-header"><h2>Xuất báo cáo Excel</h2><p>Xuất một sheet duy nhất theo định dạng file tham khảo.</p></div><div class="side-card export-card"><div id="sheetOptions" class="checks"></div><button id="exportPageBtn" class="button button-primary">Xuất file .xlsx</button></div></section>
+      <section id="settings" class="view"><div class="view-header"><h2>Cài đặt & dữ liệu</h2><p>Các thao tác quản lý cơ sở dữ liệu dài hạn.</p></div><div class="side-card danger-zone"><h3>Xóa cơ sở dữ liệu Mua Hàng</h3><p>Tạo backup cuối rồi xóa baseline. Job Code vẫn được giữ.</p><button id="deleteDatabase" class="button danger">Xóa database</button></div></section>
+    </main>
+  </div>
+  <div id="toast" class="toast" hidden></div>
+  <dialog id="infoDialog" class="info-dialog"><section><header><div class="info-icon">i</div><div><h2>Đối Chiếu Dữ Liệu</h2><p>Phiên bản <strong id="appVersion">—</strong></p></div><button id="closeInfo" class="info-close" type="button" aria-label="Đóng">×</button></header><div class="info-content"><h3>Những cải tiến</h3><ul><li>Liên kết mã hàng cũ và mã thay thế theo từng dự án.</li><li>Đối chiếu đúng số lượng PR mới mà không cộng mã cũ đã hủy.</li><li>Hiển thị mã hàng và PR cũ gạch ngang → mã mới.</li><li>Cập nhật phiên bản trực tiếp từ GitHub bằng nút Update.</li><li>Cải thiện đối chiếu số lượng và phân loại Đủ, Thiếu, Thừa.</li></ul><button id="githubLink" class="button button-primary" type="button">Mở trang GitHub</button></div></section></dialog>
+  <div id="sheetPicker" class="sheet-modal-overlay" hidden><section class="sheet-modal" role="dialog" aria-modal="true" aria-labelledby="sheetPickerTitle"><header><h2 id="sheetPickerTitle">Chọn sheet cần nạp</h2><p>Có thể chọn một hoặc nhiều sheet trong từng file.</p></header><div id="sheetPickerList" class="sheet-picker-list"></div><footer><button id="cancelSheetPicker" class="button" type="button">Hủy</button><button id="confirmSheetPicker" class="button button-primary" type="button">Nạp sheet đã chọn</button></footer></section></div>
+  <dialog id="deleteDialog"><form method="dialog"><p>XÁC NHẬN <span id="confirmStep">1</span>/3</p><h2 id="confirmTitle"></h2><p id="confirmText"></p><input id="deleteKeyword" class="hidden" placeholder="Nhập XÓA"><div><button value="cancel" class="button">Hủy</button><button id="confirmDelete" value="default" class="button danger">Xác nhận</button></div></form></dialog>
+  <script src="app.js"></script>
+</body>
+</html>
