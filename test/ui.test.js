@@ -60,6 +60,16 @@ test('file import supports multiple files and explicit multi-sheet selection', (
   assert.match(js, /setTimeout\(applyThreshold,350\)/);
 });
 
+test('scan and warehouse imports persist and merge incrementally across app restarts', () => {
+  assert.match(main, /database\.readScans\(\)/);
+  assert.match(main, /database\.readWarehouse\(\)/);
+  assert.match(main, /database\.mergeScans\(result\.rows\)/);
+  assert.match(main, /database\.mergeWarehouse\(result\.rows\)/);
+  assert.match(main, /database\.clearWorkingSession\(\)/);
+  assert.match(main, /decisions:new Map\(workingSession\.decisions \|\| \[\]\)/);
+  assert.match(js, /thêm \$\{stats\.added\}, cập nhật \$\{stats\.updated\}/);
+});
+
 test('Job Code uses the bundled MKAC reference without a manual import row', () => {
   assert.equal(fs.existsSync(builtInJobCodeFile), true);
   assert.doesNotMatch(html, /data-kind="reference"/);
@@ -275,7 +285,7 @@ test('comparison is scan-led, exposes requested fields and runs automatically wh
   }
   assert.match(js, /scanDrawingCode/);
   assert.match(main, /autoCompareWhenReady\(\)/);
-  assert.match(main, /source\.kind === 'scan'/);
+  assert.match(main, /session\.scans\.length/);
   assert.match(main, /session\.purchase\.length \|\| session\.warehouse\.length/);
   assert.match(css, /data-table="comparison"[\s\S]*data-column="note"/);
 });

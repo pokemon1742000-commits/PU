@@ -1,6 +1,6 @@
 {
   "name": "doi-chieu-du-lieu",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Ứng dụng đối chiếu dữ liệu mua hàng, quét mã và nhập kho",
   "repository": {
     "type": "git",

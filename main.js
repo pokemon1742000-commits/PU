@@ -20,7 +20,7 @@ let builtInJobCodeReference;
 app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096');
 
 function emptySession() {
-  return { purchase: [], purchaseAll: [], purchaseDetails: [], purchaseReplacements: [], scans: [], scanDetails: [], warehouse: [], warehouseDetails: [], comparison: [], review: [], warnings: [], formatWarnings: [], jobCodes: [], jobCodeDetails: [], jobCodeNotes: new Map(), sources: [] };
+  return { purchase: [], purchaseAll: [], purchaseDetails: [], purchaseReplacements: [], scans: [], scanDetails: [], warehouse: [], warehouseDetails: [], comparison: [], review: [], warnings: [], formatWarnings: [], jobCodes: [], jobCodeDetails: [], jobCodeNotes: new Map(), decisions: new Map(), sources: [] };
 }
 
 function createWindow() {
@@ -39,11 +39,13 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   database = new Database(path.join(app.getPath('userData'), 'data'));
   await database.init();
-  const [purchaseAll, purchaseDetails, purchaseReplacements, jobCodeReference] = await Promise.all([
-    database.readPurchases(), database.readRawPurchases(), database.readPurchaseReplacements(), readBuiltInJobCodeReference()
+  const [purchaseAll, purchaseDetails, purchaseReplacements, scans, scanDetails, warehouse, warehouseDetails, workingSession, jobCodeReference] = await Promise.all([
+    database.readPurchases(), database.readRawPurchases(), database.readPurchaseReplacements(),
+    database.readScans(), database.readRawScans(), database.readWarehouse(), database.readRawWarehouse(), database.readWorkingSession(), readBuiltInJobCodeReference()
   ]);
-  session = sessionWithBuiltInJobCodes({ ...session, purchaseAll, purchaseDetails, purchaseReplacements }, jobCodeReference);
+  session = sessionWithBuiltInJobCodes({ ...session, purchaseAll, purchaseDetails, purchaseReplacements, scans, scanDetails, warehouse, warehouseDetails, formatWarnings:workingSession.formatWarnings || [], sources:workingSession.sources || [], decisions:new Map(workingSession.decisions || []) }, jobCodeReference);
   refreshValidatedSession();
+  autoCompareWhenReady();
   configureAutoUpdater();
   registerIpc();
   createWindow();
@@ -90,6 +92,7 @@ function registerIpc() {
   ipcMain.handle('review:resolve', async (_e, payload) => {
     const out = resolveReview(session, payload);
     Object.assign(session, out);
+    await saveWorkingSession();
     return summary();
   });
   ipcMain.handle('purchase-replacement:save', async (_e, payload) => {
@@ -112,6 +115,7 @@ function registerIpc() {
   });
   ipcMain.handle('data:rows', (_e, name, options) => rowsFor(name, options));
   ipcMain.handle('session:clear', async () => {
+    await database.clearWorkingSession();
     const [purchaseAll, purchaseDetails, purchaseReplacements, jobCodeReference] = await Promise.all([
       database.readPurchases(), database.readRawPurchases(), database.readPurchaseReplacements(), readBuiltInJobCodeReference()
     ]);
@@ -150,15 +154,20 @@ async function load(kind, selections) {
       ]);
       result.stats = merged.stats;
     } else if (kind === 'scan') {
-      session.scans = result.rows;
-      session.scanDetails = result.details || [];
+      const merged = await database.mergeScans(result.rows);
+      session.scans = merged.rows;
+      session.scanDetails = await database.mergeRawScans(result.details || result.rows);
+      result.stats = merged.stats;
     } else if (kind === 'warehouse') {
-      session.warehouse = result.rows;
-      session.warehouseDetails = result.details || [];
+      const merged = await database.mergeWarehouse(result.rows);
+      session.warehouse = merged.rows;
+      session.warehouseDetails = await database.mergeRawWarehouse(result.details || result.rows);
+      result.stats = merged.stats;
     }
     session.formatWarnings.push(...(result.warnings || []));
     refreshValidatedSession();
     session.sources.push(...filePaths.map(p => ({ kind, file: path.basename(p), path: p, loadedAt: new Date().toISOString() })));
+    await saveWorkingSession();
     autoCompareWhenReady();
     return { ...summary(), loadStats: result.stats || { loaded: result.rows.length } };
   } catch (error) { throw new Error(error.message || String(error)); }
@@ -319,8 +328,11 @@ function runComparison(threshold = 95, confirmThreshold = confirmationThreshold)
 }
 
 function autoCompareWhenReady() {
-  const scanFileLoaded = session.sources.some(source => source.kind === 'scan');
-  if (scanFileLoaded && (session.purchase.length || session.warehouse.length)) runComparison(comparisonThreshold, confirmationThreshold);
+  if (session.scans.length && (session.purchase.length || session.warehouse.length)) runComparison(comparisonThreshold, confirmationThreshold);
+}
+
+function saveWorkingSession() {
+  return database.writeWorkingSession({ sources:session.sources, formatWarnings:session.formatWarnings, decisions:[...(session.decisions || new Map()).entries()] });
 }
 
 function jobNotesFromDetails(rows) {

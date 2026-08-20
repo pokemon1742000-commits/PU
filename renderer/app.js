@@ -72,7 +72,9 @@ async function handleLoad(button){
       show('data',$(`.nav[data-open-table="${table}"]`));
       await showTable(table);
       const stats=result.loadStats||{};
-      toast(`Đã nạp ${selections.length} file ${labelKind(button.dataset.kind)}`);
+      const changes=Number.isFinite(stats.added)&&Number.isFinite(stats.updated)
+        ? ` · thêm ${stats.added}, cập nhật ${stats.updated}, không đổi ${stats.unchanged||0}`:'';
+      toast(`Đã nạp ${selections.length} file ${labelKind(button.dataset.kind)}${changes}`);
     },null);
   } catch(e){ document.body.style.cursor=''; toast(`Lỗi: ${e.message}`,true); }
 }

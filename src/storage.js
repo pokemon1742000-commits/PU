@@ -5,10 +5,15 @@ class Database {
   constructor(dir) {
     this.dir = dir;
     this.purchaseFile = path.join(dir, 'purchases.json');
+    this.scanFile = path.join(dir, 'scans.json');
+    this.warehouseFile = path.join(dir, 'warehouse.json');
     this.jobFile = path.join(dir, 'job-codes.json');
     this.purchaseRawFile = path.join(dir, 'purchase-raw.json');
+    this.scanRawFile = path.join(dir, 'scan-raw.json');
+    this.warehouseRawFile = path.join(dir, 'warehouse-raw.json');
     this.purchaseReplacementFile = path.join(dir, 'purchase-code-replacements.json');
     this.jobRawFile = path.join(dir, 'job-codes-raw.json');
+    this.workingSessionFile = path.join(dir, 'working-session.json');
     this.archiveManifestFile = path.join(dir, 'source-archives.json');
     this.backupDir = path.join(dir, 'backups');
     this.originalDir = path.join(dir, 'original-files');
@@ -17,10 +22,16 @@ class Database {
   async read(file, fallback = []) { try { return JSON.parse(await fs.readFile(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } }
   async atomicWrite(file, value) { const temp = `${file}.tmp`; await fs.writeFile(temp, JSON.stringify(value, null, 2), 'utf8'); await fs.rename(temp, file); }
   readPurchases() { return this.read(this.purchaseFile); }
+  readScans() { return this.read(this.scanFile); }
+  readWarehouse() { return this.read(this.warehouseFile); }
   readJobCodes() { return this.read(this.jobFile); }
   readRawPurchases() { return this.read(this.purchaseRawFile); }
+  readRawScans() { return this.read(this.scanRawFile); }
+  readRawWarehouse() { return this.read(this.warehouseRawFile); }
   readRawJobCodes() { return this.read(this.jobRawFile); }
   readPurchaseReplacements() { return this.read(this.purchaseReplacementFile); }
+  readWorkingSession() { return this.read(this.workingSessionFile, {}); }
+  writeWorkingSession(value) { return this.atomicWrite(this.workingSessionFile, value || {}); }
   async savePurchaseReplacement(projectCode, oldCode, newCode) {
     const project = String(projectCode || '').trim().toUpperCase();
     const oldItemCode = String(oldCode || '').trim().toUpperCase();
@@ -68,6 +79,8 @@ class Database {
     return rows;
   }
   mergeRawPurchases(rows) { return this.mergeRaw(this.purchaseRawFile, rows); }
+  mergeRawScans(rows) { return this.mergeRaw(this.scanRawFile, rows); }
+  mergeRawWarehouse(rows) { return this.mergeRaw(this.warehouseRawFile, rows); }
   mergeRawJobCodes(rows) { return this.mergeRaw(this.jobRawFile, rows); }
   writeJobCodes(codes) { return this.atomicWrite(this.jobFile, codes); }
   async archiveSourceFiles(kind, filePaths) {
@@ -145,9 +158,48 @@ class Database {
     if (added || updated || deduplicated) { await this.backup(); await this.atomicWrite(this.purchaseFile, rows); }
     return { rows, stats: { loaded: incoming.length, added, updated, unchanged, total: rows.length } };
   }
+  async mergeDataset(file, incoming, keyFields, compareFields) {
+    const key = row => keyFields.map(field => String(row[field] ?? '').trim().toUpperCase()).join('|');
+    const existing = await this.read(file);
+    const map = new Map(existing.map(row => [key(row), row]));
+    let added = 0, updated = 0, unchanged = 0;
+    for (const row of incoming || []) {
+      const rowKey = key(row), old = map.get(rowKey);
+      if (!old) { map.set(rowKey, row); added++; }
+      else if (compareFields.some(field => JSON.stringify(old[field] ?? null) !== JSON.stringify(row[field] ?? null))) {
+        map.set(rowKey, { ...old, ...row, updatedAt:new Date().toISOString() }); updated++;
+      } else unchanged++;
+    }
+    const rows = [...map.values()];
+    if (added || updated) await this.atomicWrite(file, rows);
+    return { rows, stats:{ loaded:(incoming || []).length, added, updated, unchanged, total:rows.length } };
+  }
+  mergeScans(rows) {
+    return this.mergeDataset(this.scanFile, rows,
+      ['projectCode','drawingCode','manufacturer','scanDate'],
+      ['quantity','warehouseDate','receiptCode','reference','scanDateSort','manualReview']);
+  }
+  mergeWarehouse(rows) {
+    return this.mergeDataset(this.warehouseFile, rows,
+      ['projectCode','itemCode','supplier','dueDate','deliveryDate'],
+      ['projectName','itemName','orderedQuantity','receivedQuantity','mergedRowCount','note']);
+  }
   async backup() {
     try { const data = await fs.readFile(this.purchaseFile); const stamp = new Date().toISOString().replace(/[:.]/g, '-'); await fs.writeFile(path.join(this.backupDir, `purchases-${stamp}.json`), data); } catch (e) { if (e.code !== 'ENOENT') throw e; }
   }
-  async backupAndClear() { await this.backup(); await Promise.all([this.atomicWrite(this.purchaseFile, []), this.atomicWrite(this.purchaseReplacementFile, [])]); }
+  async clearWorkingSession() {
+    await Promise.all([
+      this.atomicWrite(this.scanFile, []), this.atomicWrite(this.scanRawFile, []),
+      this.atomicWrite(this.warehouseFile, []), this.atomicWrite(this.warehouseRawFile, []),
+      this.atomicWrite(this.workingSessionFile, {})
+    ]);
+  }
+  async backupAndClear() {
+    await this.backup();
+    await Promise.all([
+      this.atomicWrite(this.purchaseFile, []), this.atomicWrite(this.purchaseRawFile, []),
+      this.atomicWrite(this.purchaseReplacementFile, []), this.clearWorkingSession()
+    ]);
+  }
 }
 module.exports = { Database };
