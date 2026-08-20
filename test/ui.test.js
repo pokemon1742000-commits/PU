@@ -10,6 +10,7 @@ const css = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
 const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
 const preload = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8');
 const exporter = fs.readFileSync(path.join(__dirname, '..', 'src', 'exporter.js'), 'utf8');
+const processor = fs.readFileSync(path.join(__dirname, '..', 'src', 'processor.js'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
 const releaseAuto = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'release-auto.ps1'), 'utf8');
 const builtInJobCodeFile = path.join(__dirname, '..', 'assets', 'MKAC Monthly Timesheet.xlsx');
@@ -239,7 +240,13 @@ test('installed app exposes a silent GitHub update button and automated release 
   assert.equal(packageJson.build.publish.repo, 'PU');
   assert.equal(packageJson.build.nsis.perMachine, false);
   assert.match(releaseAuto, /npm version patch --no-git-tag-version/);
-  assert.match(releaseAuto, /electron-builder --win nsis --publish always/);
+  assert.match(releaseAuto, /electron-builder --win nsis --publish never/);
+  assert.match(releaseAuto, /gh release create/);
+  assert.match(releaseAuto, /gh release upload/);
+  assert.match(releaseAuto, /dist\\latest\.yml/);
+  assert.match(releaseAuto, /function Get-Sha512Base64/);
+  assert.match(releaseAuto, /latest\.yml does not match the built installer/);
+  assert.doesNotMatch(releaseAuto, /electron-builder --win nsis --publish always/);
   assert.match(releaseAuto, /git add -- \$releasePaths/);
   assert.match(releaseAuto, /function Invoke-Probe/);
   assert.match(releaseAuto, /\$repositoryProbe = Invoke-Probe \{ git rev-parse --is-inside-work-tree \}/);
@@ -296,6 +303,16 @@ test('confirmation clicks are queued optimistically and sent as one batch', () =
   assert.match(js, /items=\[\.\.\.confirmationQueue\.values\(\)\]/);
   assert.match(js, /markConfirmationQueued/);
   assert.match(css, /\.confirmation-saving/);
+});
+
+test('confirmation rebuild reuses purchase indexes and only scans active projects', () => {
+  assert.match(processor, /const purchaseReplacementCache = new WeakMap\(\)/);
+  assert.match(processor, /if \(!Array\.isArray\(rows\) \|\| !replacements\?\.length\) return source/);
+  assert.match(processor, /if \(cached\?\.signature === signature\) return cached\.rows/);
+  assert.match(processor, /for \(const project of scanProjects\)/);
+  assert.match(processor, /warehouseIndex\.itemNameKeys\.get/);
+  assert.doesNotMatch(processor, /new Set\(\[\.\.\.purchaseGroups\.keys\(\), \.\.\.warehouseGroups\.keys\(\)\]\)/);
+  assert.doesNotMatch(processor, /\[\.\.\.warehouseGroups\.entries\(\)\]\.filter/);
 });
 
 test('result tables keep key fields on one line and notes on exactly two lines', () => {

@@ -6,6 +6,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $remoteUrl = 'https://github.com/pokemon1742000-commits/PU.git'
+$repository = 'pokemon1742000-commits/PU'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $tokenLoadedFromGh = $false
 
@@ -37,10 +38,24 @@ function Invoke-Probe {
   }
 }
 
+function Get-Sha512Base64 {
+  param([Parameter(Mandatory = $true)][string]$Path)
+
+  $stream = [System.IO.File]::OpenRead($Path)
+  $hasher = [System.Security.Cryptography.SHA512]::Create()
+  try {
+    return [Convert]::ToBase64String($hasher.ComputeHash($stream))
+  } finally {
+    $hasher.Dispose()
+    $stream.Dispose()
+  }
+}
+
 Set-Location -LiteralPath $projectRoot
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw 'Git was not found. Install Git for Windows.' }
 if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { throw 'npm was not found. Install Node.js LTS.' }
+if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw 'GitHub CLI was not found. Install GitHub CLI.' }
 
 $repositoryProbe = Invoke-Probe { git rev-parse --is-inside-work-tree }
 if ($repositoryProbe.ExitCode -ne 0 -or $repositoryProbe.Output -ne 'true') {
@@ -60,7 +75,6 @@ if ($LASTEXITCODE -ne 0 -or -not $branch) { $branch = 'main' }
 if ($branch -ne 'main') { throw "release:auto only publishes branch main; current branch is '$branch'." }
 
 if (-not $env:GH_TOKEN) {
-  if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw 'GH_TOKEN is missing and GitHub CLI is not installed.' }
   $tokenProbe = Invoke-Probe { gh auth token }
   $env:GH_TOKEN = $tokenProbe.Output
   if ($tokenProbe.ExitCode -ne 0 -or -not $env:GH_TOKEN) { throw 'GitHub CLI is not signed in. Run gh auth login first.' }
@@ -96,7 +110,27 @@ try {
   Invoke-Checked "Create tag $tag" { git tag -a $tag -m $Message }
   Invoke-Checked 'Push main to GitHub' { git push --set-upstream origin main }
   Invoke-Checked "Push tag $tag" { git push origin $tag }
-  Invoke-Checked "Publish installer $tag to GitHub Releases" { npx electron-builder --win nsis --publish always }
+
+  $releaseProbe = Invoke-Probe { gh release view $tag --repo $repository }
+  if ($releaseProbe.ExitCode -ne 0) {
+    Invoke-Checked "Create GitHub Release $tag" { gh release create $tag --repo $repository --verify-tag --title $tag --notes $Message }
+  }
+
+  $installer = Join-Path $projectRoot "dist\Doi-Chieu-Setup-$version.exe"
+  $blockMap = "$installer.blockmap"
+  $latestMetadata = Join-Path $projectRoot 'dist\latest.yml'
+  foreach ($asset in @($installer, $blockMap, $latestMetadata)) {
+    if (-not (Test-Path -LiteralPath $asset)) { throw "Release asset was not found: $asset" }
+  }
+
+  $installerSize = (Get-Item -LiteralPath $installer).Length
+  $installerHash = Get-Sha512Base64 -Path $installer
+  $latestContent = Get-Content -Raw -LiteralPath $latestMetadata
+  $hashMatches = [regex]::Matches($latestContent, "(?m)^\s*sha512:\s+$([regex]::Escape($installerHash))\s*$").Count
+  if ($latestContent -notmatch "(?m)^\s*size:\s+$installerSize\s*$" -or $hashMatches -lt 2) {
+    throw 'latest.yml does not match the built installer. Refusing to publish an update that cannot be installed.'
+  }
+  Invoke-Checked "Upload installer assets for $tag" { gh release upload $tag $installer $blockMap $latestMetadata --repo $repository --clobber }
 
   Write-Host "`nDone: $tag was committed, built, pushed, and published to $remoteUrl." -ForegroundColor Green
 } finally {

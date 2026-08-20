@@ -386,8 +386,20 @@ function candidate(target, rows, field) {
 }
 
 function sum(rows, field) { return rows.reduce((total, row) => total + number(row[field]), 0); }
+const purchaseReplacementCache = new WeakMap();
+
+function purchaseReplacementSignature(replacements) {
+  return (replacements || []).map(replacement => [
+    canonicalProject(replacement.projectCode), norm(replacement.oldCode), norm(replacement.newCode)
+  ].join('|')).join('\n');
+}
+
 function applyPurchaseReplacements(rows, replacements) {
   const source = rows || [];
+  if (!Array.isArray(rows) || !replacements?.length) return source;
+  const signature = purchaseReplacementSignature(replacements);
+  const cached = purchaseReplacementCache.get(rows);
+  if (cached?.signature === signature) return cached.rows;
   const byKey = new Map(source.map(row => [sourceItemKey(row.projectCode, row.itemCode), row]));
   const oldKeys = new Set(), aliasesByTarget = new Map();
   for (const replacement of replacements || []) {
@@ -399,7 +411,7 @@ function applyPurchaseReplacements(rows, replacements) {
     if (!aliasesByTarget.has(targetKey)) aliasesByTarget.set(targetKey, []);
     aliasesByTarget.get(targetKey).push(oldRow);
   }
-  return source.filter(row => !oldKeys.has(sourceItemKey(row.projectCode, row.itemCode))).map(row => {
+  const result = source.filter(row => !oldKeys.has(sourceItemKey(row.projectCode, row.itemCode))).map(row => {
     const aliases = aliasesByTarget.get(sourceItemKey(row.projectCode, row.itemCode)) || [];
     if (!aliases.length) return row;
     return {
@@ -409,6 +421,8 @@ function applyPurchaseReplacements(rows, replacements) {
       replacementPurchaseOrder: clean(row.purchaseOrder)
     };
   });
+  purchaseReplacementCache.set(rows, { signature, rows:result });
+  return result;
 }
 function uniqueBy(rows, field) {
   const found = new Map();
@@ -599,7 +613,11 @@ function buildComparison(purchases, scans, warehouse, threshold = 95, decisions 
   }
   const purchaseGroups = purchaseIndex.groups;
   const warehouseGroups = warehouseIndex.groups;
-  const remainingKeys = new Set([...purchaseGroups.keys(), ...warehouseGroups.keys()]);
+  const remainingKeys = new Set();
+  for (const project of scanProjects) {
+    for (const row of purchaseIndex.byProject.get(project) || []) remainingKeys.add(sourceItemKey(project, row.itemCode));
+    for (const row of warehouseIndex.byProject.get(project) || []) remainingKeys.add(sourceItemKey(project, row.itemCode));
+  }
   const handledRemainingKeys = new Set();
   for (const key of remainingKeys) {
     if (handledRemainingKeys.has(key)) continue;
@@ -609,12 +627,11 @@ function buildComparison(purchases, scans, warehouse, threshold = 95, decisions 
     let warehouseRows = usedWarehouseKeys.has(key) || reservedWarehouseKeys.has(key) ? [] : (warehouseGroups.get(key) || []);
     if (purchaseRows.length && !warehouseRows.length) {
       const purchaseCode = norm(purchaseRows[0].itemCode);
-      const aliases = [...warehouseGroups.entries()].filter(([warehouseKey, rows]) =>
+      const aliasKeys = warehouseIndex.itemNameKeys.get(`${keyProject}|${purchaseCode}`) || [];
+      const aliases = [...aliasKeys].map(warehouseKey => [warehouseKey, warehouseGroups.get(warehouseKey) || []]).filter(([warehouseKey]) =>
         !handledRemainingKeys.has(warehouseKey)
         && !usedWarehouseKeys.has(warehouseKey)
         && !reservedWarehouseKeys.has(warehouseKey)
-        && warehouseKey.split('|', 1)[0] === keyProject
-        && rows.some(row => norm(row.itemName) === purchaseCode)
       );
       if (aliases.length === 1) {
         handledRemainingKeys.add(aliases[0][0]);
@@ -676,14 +693,20 @@ function groupSourceItems(rows) {
 
 function comparisonSourceIndex(rows) {
   if (Array.isArray(rows) && comparisonSourceCache.has(rows)) return comparisonSourceCache.get(rows);
-  const byProject = new Map();
+  const byProject = new Map(), itemNameKeys = new Map();
   for (const row of rows || []) {
     const project = canonicalProject(row.projectCode);
     if (!project) continue;
     if (!byProject.has(project)) byProject.set(project, []);
     byProject.get(project).push(row);
+    const itemName = norm(row.itemName), itemKey = sourceItemKey(project, row.itemCode);
+    if (itemName && norm(row.itemCode)) {
+      const lookupKey = `${project}|${itemName}`;
+      if (!itemNameKeys.has(lookupKey)) itemNameKeys.set(lookupKey, new Set());
+      itemNameKeys.get(lookupKey).add(itemKey);
+    }
   }
-  const index = { byProject, groups: groupSourceItems(rows) };
+  const index = { byProject, groups: groupSourceItems(rows), itemNameKeys };
   if (Array.isArray(rows)) comparisonSourceCache.set(rows, index);
   return index;
 }

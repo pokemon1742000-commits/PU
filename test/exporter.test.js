@@ -24,8 +24,9 @@ test('comparison export follows the single-sheet template, excludes confirmation
   assert.deepEqual(workbook.worksheets.map(sheet => sheet.name), ['MEC001']);
   const sheet = workbook.getWorksheet('MEC001');
   assert.equal(sheet.getCell('A3').value, 'SỐ LIỆU XUẤT KHO');
-  assert.deepEqual(sheet.getRow(9).values.slice(1), ['STT','Mã dự án','Mã hàng','Tên hàng','Số lượng BOOM','Số liệu XK','Maker','Ngày bắn code','Ngày nhập kho','Số lượng nhập kho','Note']);
-  assert.deepEqual(sheet.getRow(10).values.slice(1), [1,'MEC001','DWG-1','Item',3,1,'Maker A','15/Aug','14/08/2026',2,'Thiếu 2']);
+  assert.deepEqual(sheet.getRow(9).values.slice(1), ['STT','Mã dự án','Mã hàng','Tên hàng','Số lượng BOOM','Số liệu XK','Maker','Ngày bắn code','Ngày nhập kho','Số lượng nhập kho','Note','Note đổi mã','Đổi PR']);
+  assert.deepEqual(sheet.getRow(10).values.slice(1), [1,'MEC001','DWG-1','Item',3,1,'Maker A','15/Aug','14/08/2026',2,'Hàng chưa về','','']);
+  assert.equal(sheet.getCell('K11').value, 'Bắn code thừa');
   assert.equal(sheet.getCell('A9').fill.fgColor.argb, 'FF92D050');
   assert.equal(sheet.getCell('F9').fill.fgColor.argb, 'FFFFC000');
   assert.equal(sheet.views[0].xSplit, 5);
@@ -55,12 +56,30 @@ test('comparison export combines multiple scan projects into one sheet', async t
   assert.equal(workbook.getWorksheet('NHIỀU DỰ ÁN').getCell('A11').value, 2);
 });
 
+test('comparison export writes concise notes from quantity status', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'comparison-notes-'));
+  t.after(() => fs.rm(dir, { recursive:true, force:true }));
+  const file = path.join(dir, 'notes.xlsx');
+  await exportWorkbook(file, ['comparison'], { comparison:[
+    { projectCode:'MEC1', drawingCode:'ENOUGH', purchaseQuantity:2, scanQuantity:2, warehouseQuantity:0, note:'old detail' },
+    { projectCode:'MEC1', drawingCode:'NOT-ARRIVED', purchaseQuantity:3, scanQuantity:1, warehouseQuantity:1, note:'old detail' },
+    { projectCode:'MEC1', drawingCode:'NOT-SCANNED', purchaseQuantity:3, scanQuantity:1, warehouseQuantity:3, note:'old detail' },
+    { projectCode:'MEC1', drawingCode:'EXCESS', purchaseQuantity:3, scanQuantity:4, warehouseQuantity:3, note:'old detail' }
+  ] });
+  const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile(file);
+  const sheet = workbook.getWorksheet('MEC1');
+  assert.deepEqual([10, 11, 12, 13].map(row => sheet.getCell(`K${row}`).value || ''), [
+    '', 'Hàng chưa về', 'Chưa quét mã', 'Bắn code thừa'
+  ]);
+});
+
 test('comparison export strikes an old linked code and shows the new code', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'linked-code-export-'));
   t.after(() => fs.rm(dir, { recursive:true, force:true }));
   const file = path.join(dir, 'linked-code.xlsx');
   await exportWorkbook(file, ['comparison'], { comparison:[{
     projectCode:'AUT1', drawingCode:'NEW-01', originalItemCode:'OLD-01', replacementItemCode:'NEW-01',
+    originalPurchaseOrder:'PR-OLD', replacementPurchaseOrder:'PR-NEW',
     purchaseQuantity:1, scanQuantity:1, warehouseQuantity:1
   }] });
   const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile(file);
@@ -68,4 +87,12 @@ test('comparison export strikes an old linked code and shows the new code', asyn
   assert.equal(value.richText[0].text, 'OLD-01');
   assert.equal(value.richText[0].font.strike, true);
   assert.equal(value.richText[1].text, ' → NEW-01');
+  const codeNote = workbook.getWorksheet('AUT1').getCell('L10').value;
+  assert.equal(codeNote.richText[0].text, 'OLD-01');
+  assert.equal(codeNote.richText[0].font.strike, true);
+  assert.equal(codeNote.richText[1].text, ' → NEW-01');
+  const prNote = workbook.getWorksheet('AUT1').getCell('M10').value;
+  assert.equal(prNote.richText[0].text, 'PR-OLD');
+  assert.equal(prNote.richText[0].font.strike, true);
+  assert.equal(prNote.richText[1].text, ' → PR-NEW');
 });
