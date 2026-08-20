@@ -55,7 +55,7 @@ function renderUpdateStatus(update){
   if(update?.message&&update.status!=='idle')toast(update.message,update.status==='error');
 }
 function show(id,button){ $$('.view').forEach(x=>x.classList.toggle('active',x.id===id)); $$('.nav').forEach(x=>x.classList.remove('active')); button?.classList.add('active'); requestAnimationFrame(updateNavIndicator); }
-async function refresh(s){ if(s?.canceled)return; state=s; const c=s.counts||{}; for(const k of ['comparison','enough','shortage','excess','warnings']) $(`#${k}Count`) && ($(`#${k}Count`).textContent=c[k]||0); $('#dashPurchase').textContent=c.purchase||0;$('#dashScan').textContent=c.scans||0;$('#dashReview').textContent=c.review||0;$('#reviewBadge').textContent=c.review||0;$('#appVersion').textContent=s.appVersion||'—'; if(s.autoThreshold!==undefined)$('#threshold').value=s.autoThreshold;if(s.confirmationThreshold!==undefined)$('#confirmationThreshold').value=s.confirmationThreshold;syncThresholdLabels();updateRawToggle();renderCodeReplacements(); }
+async function refresh(s){ if(s?.canceled)return; state=s; const c=s.counts||{},version=s.appVersion||'—',versionLabel=version==='—'?'v—':`v${version}`; for(const k of ['comparison','enough','shortage','excess','warnings']) $(`#${k}Count`) && ($(`#${k}Count`).textContent=c[k]||0); $('#dashPurchase').textContent=c.purchase||0;$('#dashScan').textContent=c.scans||0;$('#dashReview').textContent=c.review||0;$('#reviewBadge').textContent=c.review||0;$('#appVersion').textContent=versionLabel;$('#headerVersion').textContent=versionLabel;$$('.release-note').forEach(note=>{const current=note.dataset.version===version;note.classList.toggle('current',current);note.querySelector('.current-version-badge').hidden=!current}); if(s.autoThreshold!==undefined)$('#threshold').value=s.autoThreshold;if(s.confirmationThreshold!==undefined)$('#confirmationThreshold').value=s.confirmationThreshold;syncThresholdLabels();updateRawToggle();renderCodeReplacements(); }
 
 async function handleLoad(button){
   try {
@@ -68,11 +68,11 @@ async function handleLoad(button){
     await run(async()=>{
       const result=await window.api.loadFiles(button.dataset.kind,selections);
       await refresh(result);
-      const table=button.dataset.kind==='reference'?'jobCodes':button.dataset.kind;
+      const table=button.dataset.kind;
       show('data',$(`.nav[data-open-table="${table}"]`));
       await showTable(table);
       const stats=result.loadStats||{};
-      toast(button.dataset.kind==='reference'?`Job Code: thêm ${stats.added||0}, trùng ${stats.unchanged||0}, tổng ${stats.total||0} mã`:`Đã nạp ${selections.length} file ${labelKind(button.dataset.kind)}`);
+      toast(`Đã nạp ${selections.length} file ${labelKind(button.dataset.kind)}`);
     },null);
   } catch(e){ document.body.style.cursor=''; toast(`Lỗi: ${e.message}`,true); }
 }
@@ -198,5 +198,5 @@ function renderPagination(){const {page,total,totalPages,pageSize}=tablePage,sta
 let deleteStep=1; function startDelete(){deleteStep=1;renderDelete();$('#deleteDialog').showModal()} function renderDelete(){const titles=['Xóa toàn bộ dữ liệu Mua Hàng?','Hành động không thể hoàn tác','Xác nhận lần cuối'];const texts=['Baseline tích lũy sẽ bị xóa sau ba bước xác nhận.','Toàn bộ dữ liệu Mua Hàng từ trước đến nay sẽ mất. Một backup cuối sẽ được tạo.','Nhập chính xác từ XÓA để tiếp tục.'];$('#confirmStep').textContent=deleteStep;$('#confirmTitle').textContent=titles[deleteStep-1];$('#confirmText').textContent=texts[deleteStep-1];$('#deleteKeyword').classList.toggle('hidden',deleteStep!==3);$('#confirmDelete').textContent=deleteStep===3?'XÓA VĨNH VIỄN':'Xác nhận';} async function advanceDelete(){if(deleteStep<3){deleteStep++;renderDelete();return}await run(async()=>{await refresh(await window.api.deleteDatabase($('#deleteKeyword').value));$('#deleteDialog').close()},'Đã xóa database; backup cuối đã được tạo');}
 function updateNavIndicator(){const indicator=$('.nav-indicator'),active=$('.nav-item.active');if(!indicator||!active)return;const parent=active.parentElement,p=parent.getBoundingClientRect(),b=active.getBoundingClientRect();indicator.style.width=`${b.width}px`;indicator.style.transform=`translateX(${b.left-p.left+parent.scrollLeft}px)`}
 function applyTheme(theme){document.body.classList.remove('theme-mint','theme-sky','theme-lavender');if(theme!=='default')document.body.classList.add(`theme-${theme}`);$$('.theme-dot').forEach(b=>b.classList.toggle('active',b.dataset.theme===theme));localStorage.setItem('theme',theme)}
-async function run(fn,success){try{document.body.style.cursor='progress';await fn();if(success)toast(success)}catch(e){toast(`Lỗi: ${e.message}`,true)}finally{document.body.style.cursor=''}}function toast(msg,error=false){const t=$('#toast');t.textContent=msg;t.style.background=error?'#9f3732':'';t.hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>t.hidden=true,4200)}function labelKind(k){return {purchase:'Mua Hàng',scan:'Quét Mã',warehouse:'Nhập Kho',reference:'Job Code'}[k]}function escapeHtml(v){return String(v).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
+async function run(fn,success){try{document.body.style.cursor='progress';await fn();if(success)toast(success)}catch(e){toast(`Lỗi: ${e.message}`,true)}finally{document.body.style.cursor=''}}function toast(msg,error=false){const t=$('#toast');t.textContent=msg;t.style.background=error?'#9f3732':'';t.hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>t.hidden=true,4200)}function labelKind(k){return {purchase:'Mua Hàng',scan:'Quét Mã',warehouse:'Nhập Kho'}[k]}function escapeHtml(v){return String(v).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
 init();

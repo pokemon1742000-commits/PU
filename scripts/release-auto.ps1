@@ -80,7 +80,7 @@ try {
 
   $releasePaths = @(
     '.gitignore', 'AGENTS.md', 'README.md', 'main.js', 'package.json', 'package-lock.json',
-    'preload.js', 'publish-github.cmd', 'start-app.cmd', 'renderer', 'src', 'test', 'scripts'
+    'preload.js', 'publish-github.cmd', 'start-app.cmd', 'assets', 'renderer', 'src', 'test', 'scripts'
   ) | Where-Object { Test-Path -LiteralPath (Join-Path $projectRoot $_) }
   Invoke-Checked 'Stage application source' { git add -- $releasePaths }
 

@@ -1,6 +1,6 @@
 {
   "name": "doi-chieu-du-lieu",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Ứng dụng đối chiếu dữ liệu mua hàng, quét mã và nhập kho",
   "repository": {
     "type": "git",
@@ -33,10 +33,18 @@
       "preload.js",
       "src/**/*",
       "renderer/**/*",
+      "assets/app-logo.png",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "assets/MKAC Monthly Timesheet.xlsx",
+        "to": "assets/MKAC Monthly Timesheet.xlsx"
+      }
+    ],
     "win": {
-      "target": "portable"
+      "target": "portable",
+      "icon": "assets/app-logo.png"
     },
     "nsis": {
       "oneClick": true,

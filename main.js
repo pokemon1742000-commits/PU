@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs/promises');
 const { Worker } = require('worker_threads');
@@ -14,6 +14,8 @@ let comparisonThreshold = 95;
 let confirmationThreshold = 70;
 let updateState = { status:'idle', message:'Sẵn sàng kiểm tra cập nhật', percent:0, currentVersion:app.getVersion() };
 const DEFAULT_PAGE_SIZE = 100;
+const BUILT_IN_JOB_CODE_FILE = path.join(app.isPackaged ? process.resourcesPath : __dirname, 'assets', 'MKAC Monthly Timesheet.xlsx');
+let builtInJobCodeReference;
 
 app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096');
 
@@ -25,19 +27,22 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1440, height: 900, minWidth: 1050, minHeight: 680,
     backgroundColor: '#f4f1ea',
+    icon: path.join(__dirname, 'assets', 'app-logo.png'),
+    autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false }
   });
+  win.setMenuBarVisibility(false);
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 }
 
 app.whenReady().then(async () => {
+  Menu.setApplicationMenu(null);
   database = new Database(path.join(app.getPath('userData'), 'data'));
   await database.init();
-  [session.purchaseAll, session.jobCodes, session.purchaseDetails, session.jobCodeDetails, session.purchaseReplacements] = await Promise.all([
-    database.readPurchases(), database.readJobCodes(), database.readRawPurchases(), database.readRawJobCodes(), database.readPurchaseReplacements()
+  const [purchaseAll, purchaseDetails, purchaseReplacements, jobCodeReference] = await Promise.all([
+    database.readPurchases(), database.readRawPurchases(), database.readPurchaseReplacements(), readBuiltInJobCodeReference()
   ]);
-  session.jobCodeDetails = annotateJobCodeDetails(session.jobCodeDetails);
-  session.jobCodeNotes = jobNotesFromDetails(session.jobCodeDetails);
+  session = sessionWithBuiltInJobCodes({ ...session, purchaseAll, purchaseDetails, purchaseReplacements }, jobCodeReference);
   refreshValidatedSession();
   configureAutoUpdater();
   registerIpc();
@@ -62,8 +67,9 @@ function registerIpc() {
     return updateState;
   });
   ipcMain.handle('files:pick', async (_e, kind) => {
+    if (!['purchase', 'scan', 'warehouse'].includes(kind)) throw new Error('Loại file không được phép nạp thủ công.');
     const result = await dialog.showOpenDialog(win, {
-      title: kind === 'reference' ? 'Chọn file Job Code' : 'Chọn file dữ liệu',
+      title: 'Chọn file dữ liệu',
       properties: ['openFile', 'multiSelections'],
       filters: [{ name: 'Excel', extensions: ['xlsx', 'xlsm'] }]
     });
@@ -106,24 +112,20 @@ function registerIpc() {
   });
   ipcMain.handle('data:rows', (_e, name, options) => rowsFor(name, options));
   ipcMain.handle('session:clear', async () => {
-    const [purchaseAll, jobCodes, purchaseDetails, jobCodeDetails, purchaseReplacements] = await Promise.all([
-      database.readPurchases(), database.readJobCodes(), database.readRawPurchases(), database.readRawJobCodes(), database.readPurchaseReplacements()
+    const [purchaseAll, purchaseDetails, purchaseReplacements, jobCodeReference] = await Promise.all([
+      database.readPurchases(), database.readRawPurchases(), database.readPurchaseReplacements(), readBuiltInJobCodeReference()
     ]);
-    session = { ...emptySession(), purchaseAll, jobCodes, purchaseDetails, jobCodeDetails, purchaseReplacements, jobCodeNotes: jobNotesFromDetails(jobCodeDetails) };
-    session.jobCodeDetails = annotateJobCodeDetails(session.jobCodeDetails);
-    session.jobCodeNotes = jobNotesFromDetails(session.jobCodeDetails);
+    session = sessionWithBuiltInJobCodes({ ...emptySession(), purchaseAll, purchaseDetails, purchaseReplacements }, jobCodeReference);
     refreshValidatedSession();
     return summary();
   });
   ipcMain.handle('database:delete', async (_e, keyword) => {
     if (keyword !== 'XÓA') throw new Error('Từ khóa xác nhận không đúng.');
     await database.backupAndClear();
-    const [jobCodes, purchaseDetails, jobCodeDetails] = await Promise.all([
-      database.readJobCodes(), database.readRawPurchases(), database.readRawJobCodes()
+    const [purchaseDetails, jobCodeReference] = await Promise.all([
+      database.readRawPurchases(), readBuiltInJobCodeReference()
     ]);
-    session = { ...emptySession(), jobCodes, purchaseDetails, jobCodeDetails, jobCodeNotes: jobNotesFromDetails(jobCodeDetails) };
-    session.jobCodeDetails = annotateJobCodeDetails(session.jobCodeDetails);
-    session.jobCodeNotes = jobNotesFromDetails(session.jobCodeDetails);
+    session = sessionWithBuiltInJobCodes({ ...emptySession(), purchaseDetails }, jobCodeReference);
     refreshValidatedSession();
     return summary();
   });
@@ -153,16 +155,6 @@ async function load(kind, selections) {
     } else if (kind === 'warehouse') {
       session.warehouse = result.rows;
       session.warehouseDetails = result.details || [];
-    }
-    else if (kind === 'reference') {
-      const merged = await database.mergeJobCodes(result.rows);
-      session.jobCodes = merged.rows;
-      const [jobCodeDetails] = await Promise.all([
-        database.mergeRawJobCodes(result.details || []), database.archiveSourceFiles(kind, filePaths)
-      ]);
-      session.jobCodeDetails = annotateJobCodeDetails(jobCodeDetails);
-      session.jobCodeNotes = jobNotesFromDetails(session.jobCodeDetails);
-      result.stats = merged.stats;
     }
     session.formatWarnings.push(...(result.warnings || []));
     refreshValidatedSession();
@@ -207,6 +199,31 @@ function processFilesInWorker(kind, files) {
     for (const source of files) results.push(await processSingleFileInWorker(kind, source));
     return combineFileResults(kind, results);
   })();
+}
+
+function readBuiltInJobCodeReference() {
+  if (!builtInJobCodeReference) {
+    builtInJobCodeReference = processFilesInWorker('reference', [{ path: BUILT_IN_JOB_CODE_FILE, sheets: ['Job code'] }])
+      .then(result => ({
+        rows: [...new Set(result.rows || [])],
+        details: result.details || []
+      }))
+      .catch(error => {
+        builtInJobCodeReference = null;
+        throw new Error(`Không thể đọc file Job Code mặc định: ${error.message}`);
+      });
+  }
+  return builtInJobCodeReference;
+}
+
+function sessionWithBuiltInJobCodes(base, reference) {
+  const jobCodeDetails = annotateJobCodeDetails(reference.details || []);
+  return {
+    ...base,
+    jobCodes: [...(reference.rows || [])],
+    jobCodeDetails,
+    jobCodeNotes: jobNotesFromDetails(jobCodeDetails)
+  };
 }
 
 function processSingleFileInWorker(kind, source) {

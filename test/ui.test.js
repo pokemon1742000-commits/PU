@@ -12,6 +12,8 @@ const preload = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8'
 const exporter = fs.readFileSync(path.join(__dirname, '..', 'src', 'exporter.js'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
 const releaseAuto = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'release-auto.ps1'), 'utf8');
+const builtInJobCodeFile = path.join(__dirname, '..', 'assets', 'MKAC Monthly Timesheet.xlsx');
+const appLogoFile = path.join(__dirname, '..', 'assets', 'app-logo.png');
 
 test('all direct renderer ID references exist in the HTML', () => {
   const referenced = [...js.matchAll(/\$\('#([A-Za-z][\w:-]*)'\)/g)].map(match => match[1]);
@@ -55,6 +57,18 @@ test('file import supports multiple files and explicit multi-sheet selection', (
   assert.match(js, /chooseSheets/);
   assert.match(js, /window\.api\.loadFiles/);
   assert.match(js, /setTimeout\(applyThreshold,350\)/);
+});
+
+test('Job Code uses the bundled MKAC reference without a manual import row', () => {
+  assert.equal(fs.existsSync(builtInJobCodeFile), true);
+  assert.doesNotMatch(html, /data-kind="reference"/);
+  assert.doesNotMatch(html, /Danh sách Job Code/);
+  assert.match(html, /data-open-table="jobCodes"[\s\S]*Xem Job Code/);
+  assert.match(main, /BUILT_IN_JOB_CODE_FILE = path\.join\(app\.isPackaged \? process\.resourcesPath : __dirname, 'assets', 'MKAC Monthly Timesheet\.xlsx'\)/);
+  assert.match(main, /processFilesInWorker\('reference', \[\{ path: BUILT_IN_JOB_CODE_FILE, sheets: \['Job code'\] \}\]\)/);
+  assert.match(main, /sessionWithBuiltInJobCodes/);
+  assert.equal(packageJson.build.extraResources[0].from, 'assets/MKAC Monthly Timesheet.xlsx');
+  assert.match(releaseAuto, /'assets'/);
 });
 
 test('sidebar exposes separate auto-match and confirmation thresholds', () => {
@@ -108,8 +122,24 @@ test('Excel export is a single comparison reference sheet without confirmations'
   assert.doesNotMatch(js, /sheetOptions input:checked/);
 });
 
-test('application information dialog shows version, improvements, and the GitHub project link', () => {
+test('application branding hides the native menu and shows the logo with the current version', () => {
+  assert.equal(fs.existsSync(appLogoFile), true);
+  assert.match(html, /class="app-brand"[\s\S]*src="\.\.\/assets\/app-logo\.png"[\s\S]*id="headerVersion"/);
+  assert.match(js, /headerVersion'\)\.textContent=versionLabel/);
+  assert.match(main, /Menu\.setApplicationMenu\(null\)/);
+  assert.match(main, /autoHideMenuBar: true/);
+  assert.match(main, /win\.setMenuBarVisibility\(false\)/);
+  assert.match(main, /icon: path\.join\(__dirname, 'assets', 'app-logo\.png'\)/);
+  assert.equal(packageJson.build.win.icon, 'assets/app-logo.png');
+  assert.equal(packageJson.build.files.includes('assets/app-logo.png'), true);
+});
+
+test('application information dialog shows version-specific improvements and the GitHub project link', () => {
   assert.match(html, /id="infoDialog"[\s\S]*id="appVersion"[\s\S]*id="githubLink"/);
+  for (const version of ['1.0.2','1.0.1','1.0.0']) assert.match(html, new RegExp(`data-version="${version.replaceAll('.', '\\.')}"`));
+  assert.match(html, /Lịch sử cải tiến/);
+  assert.match(html, /current-version-badge/);
+  assert.match(js, /note\.dataset\.version===version/);
   assert.match(js, /infoDialog'\)\.showModal\(\)/);
   assert.match(js, /window\.api\.openExternal\('https:\/\/github\.com\/pokemon1742000-commits\/PU'\)/);
   assert.match(preload, /openExternal: url => ipcRenderer\.invoke\('external:open', url\)/);

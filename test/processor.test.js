@@ -549,4 +549,13 @@ test('isolated Excel parsers run sequentially', async t => {
   assert.equal(result.details[1].note, '');
   assert.deepEqual(result.notes, [['MEC2405010','Trùng 2 dòng']]);
  });
+
+ await t.test('reads the bundled MKAC Monthly Timesheet Job code reference', async () => {
+  const file = path.join(__dirname, '..', 'assets', 'MKAC Monthly Timesheet.xlsx');
+  const result = await processWithWorker('reference', file);
+  assert.equal(result.rows.length, 2156);
+  assert.equal(new Set(result.rows).size, 2151);
+  assert.equal(result.details[0].sourceSheet, 'Job code');
+  assert.equal(result.rows.includes('MEC1808001'), true);
+ });
 });
