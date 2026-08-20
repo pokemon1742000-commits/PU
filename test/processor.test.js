@@ -43,8 +43,8 @@ test('uses purchase quantity as baseline and describes each warehouse supplier',
     { projectCode:'AUT1', drawingCode:'ABC-01', quantity:6, manufacturer:'PMA', scanDate:'16/Aug' }
   ];
   const warehouse = [
-    { projectCode:'AUT1', itemCode:'ABC-01', itemName:'Motor warehouse', supplier:'NCC A', orderedQuantity:8, receivedQuantity:7, deliveryDate:'02/08/2026' },
-    { projectCode:'AUT1', itemCode:'ABC-01', itemName:'Motor warehouse', supplier:'NCC B', orderedQuantity:4, receivedQuantity:3, deliveryDate:'03/08/2026' }
+    { projectCode:'AUT1', itemCode:'ABC-01', itemName:'Motor warehouse', supplier:'NCC A', poNumber:'PO-A', orderedQuantity:8, receivedQuantity:7, dueDate:'10/08/2026', deliveryDate:'02/08/2026' },
+    { projectCode:'AUT1', itemCode:'ABC-01', itemName:'Motor warehouse', supplier:'NCC B', poNumber:'PO-B', orderedQuantity:4, receivedQuantity:3, dueDate:'11/08/2026', deliveryDate:'03/08/2026' }
   ];
   const result = buildComparison(purchases, scans, warehouse, 95);
   assert.equal(result.comparison.length, 1);
@@ -57,6 +57,10 @@ test('uses purchase quantity as baseline and describes each warehouse supplier',
   assert.equal(result.comparison[0].maker, 'PMA');
   assert.equal(result.comparison[0].warehouseDate, '03/08/2026');
   assert.equal(result.comparison[0].supplier, 'NCC A; NCC B');
+  assert.equal(result.comparison[0].operator, 'NCC A; NCC B');
+  assert.equal(result.comparison[0].poNumber, 'PO-A; PO-B');
+  assert.equal(result.comparison[0].dueDate, '10/08/2026; 11/08/2026');
+  assert.equal(result.comparison[0].warehouseOrderPlaced, true);
   assert.match(result.comparison[0].supplierNote, /NCC A: đã mua:8, đã nhập kho:7, đã quét mã:10/);
   assert.match(result.comparison[0].supplierNote, /NCC B: đã mua:4, đã nhập kho:3, đã quét mã:10/);
   assert.match(result.comparison[0].note, /^Thiếu 2: số lượng quét mã thấp hơn số lượng mua hàng; đã nhập kho 10\/12\nNCC A:/);
@@ -90,6 +94,35 @@ test('treats equal scan and purchase quantities as enough regardless of warehous
   assert.equal(quantityComparisonNote(8, 3, 8), 'Đủ: số lượng quét mã bằng số lượng mua hàng');
 });
 
+test('assigns export operators from warehouse arrival and ordering state', () => {
+  const purchases = [
+    { projectCode:'AUT1', itemCode:'ARRIVED', quantity:3 },
+    { projectCode:'AUT1', itemCode:'ORDERED', quantity:3 },
+    { projectCode:'AUT1', itemCode:'NO-ORDER', quantity:3 }
+  ];
+  const scans = [
+    { projectCode:'AUT1', drawingCode:'ARRIVED', quantity:1 },
+    { projectCode:'AUT1', drawingCode:'ORDERED', quantity:0 },
+    { projectCode:'AUT1', drawingCode:'NO-ORDER', quantity:0 }
+  ];
+  const warehouse = [
+    { projectCode:'AUT1', itemCode:'ARRIVED', supplier:'NCC A', poNumber:'PO-A', orderedQuantity:3, receivedQuantity:3, dueDate:'20/08/2026' },
+    { projectCode:'AUT1', itemCode:'ORDERED', supplier:'NCC B', poNumber:'PO-B', orderedQuantity:3, receivedQuantity:0, dueDate:'21/08/2026' }
+  ];
+  const rows = buildComparison(purchases, scans, warehouse, 95).comparison;
+  assert.equal(rows.find(row => row.drawingCode === 'ARRIVED').operator, 'Kho');
+  assert.equal(rows.find(row => row.drawingCode === 'ORDERED').operator, 'NCC B');
+  assert.equal(rows.find(row => row.drawingCode === 'NO-ORDER').operator, 'PU check');
+});
+
+test('uses the purchase supplier when the shortage has no warehouse supplier', () => {
+  const purchases = [{ projectCode:'AUT1', itemCode:'A-01', itemName:'Item', supplier:'IDEC', quantity:3 }];
+  const scans = [{ projectCode:'AUT1', drawingCode:'A-01', quantity:1 }];
+  const row = buildComparison(purchases, scans, [], 95).shortage[0];
+  assert.equal(row.supplier, 'IDEC');
+  assert.equal(row.operator, 'PU check');
+});
+
 test('marks scan and warehouse as excess when they are greater than purchase quantity', () => {
   const purchases = [{ projectCode:'AUT1', itemCode:'ABC-01', quantity:8 }];
   const scans = [{ projectCode:'AUT1', drawingCode:'ABC-01', quantity:10 }];
@@ -117,7 +150,7 @@ test('fuzzy matches scan drawing codes within the same project and accepts a dec
   const purchases = [{ projectCode:'MEC1', itemCode:'ABCD-100', quantity:2 }];
   const scans = [{ projectCode:'MEC1', drawingCode:'ABCD-10O', quantity:2 }];
   const warehouse = [{ projectCode:'MEC1', itemCode:'ABCD-100', orderedQuantity:2, receivedQuantity:2 }];
-  const first = buildComparison(purchases, scans, warehouse, 100);
+  const first = buildComparison(purchases, scans, warehouse, 100, new Map(), 80);
   assert.equal(first.review.length, 1);
   assert.equal(first.review[0].scanDrawingCode, 'ABCD-10O');
   assert.equal(first.review[0].purchaseOptions[0].score, 88);
@@ -126,11 +159,33 @@ test('fuzzy matches scan drawing codes within the same project and accepts a dec
     [first.review[0].purchaseDecisionId, { action:'matched', code:'ABCD-100' }],
     [first.review[0].warehouseDecisionId, { action:'matched', code:'ABCD-100' }]
   ]);
-  const accepted = buildComparison(purchases, scans, warehouse, 100, decisions);
+  const accepted = buildComparison(purchases, scans, warehouse, 100, decisions, 80);
   assert.equal(accepted.review.length, 0);
   assert.equal(accepted.comparison[0].purchaseQuantity, 2);
   assert.equal(accepted.comparison[0].warehouseQuantity, 2);
   assert.equal(accepted.comparison[0].matchStatus, 'Đã xác nhận');
+});
+
+test('automatically matches item codes that only differ by the _GC suffix', () => {
+  const purchases = [{ projectCode:'AUTM260552', itemCode:'2208022-TO-033', quantity:2 }];
+  const scans = [{ projectCode:'AUTM260552', drawingCode:'2208022-TO-033_GC', quantity:2 }];
+  const warehouse = [{ projectCode:'AUTM260552', itemCode:'2208022-TO-033', receivedQuantity:2 }];
+  const result = buildComparison(purchases, scans, warehouse, 100, new Map(), 99);
+  assert.equal(result.review.length, 0);
+  assert.equal(result.comparison[0].purchaseQuantity, 2);
+  assert.equal(result.comparison[0].warehouseQuantity, 2);
+  assert.equal(result.comparison[0].scanQuantity, 2);
+  assert.match(result.comparison[0].matchStatus, /100%/);
+});
+
+test('does not use the _GC shortcut when characters before the suffix differ', () => {
+  const purchases = [{ projectCode:'AUTM260552', itemCode:'2208022-TO-999', quantity:2 }];
+  const scans = [{ projectCode:'AUTM260552', drawingCode:'2208022-TO-033_GC', quantity:2 }];
+  const strict = buildComparison(purchases, scans, [], 100, new Map(), 99);
+  assert.equal(strict.review.length, 0);
+  assert.equal(strict.comparison[0].purchaseQuantity, 0);
+  const relaxed = buildComparison(purchases, scans, [], 50, new Map(), 40);
+  assert.equal(relaxed.comparison[0].purchaseQuantity, 2);
 });
 
 test('does not fuzzy match an item from a different project', () => {
@@ -189,10 +244,10 @@ test('skipping only the warehouse candidate still classifies by scan versus purc
   const purchases = [{ projectCode:'MEC1', itemCode:'ABC-01', quantity:5 }];
   const scans = [{ projectCode:'MEC1', drawingCode:'ABC-01', quantity:5 }];
   const warehouse = [{ projectCode:'MEC1', itemCode:'ABC-O1', receivedQuantity:3, supplier:'NCC' }];
-  const pending = buildComparison(purchases, scans, warehouse, 100);
+  const pending = buildComparison(purchases, scans, warehouse, 100, new Map(), 70);
   assert.equal(pending.review.length, 1);
   const ignored = new Map([[pending.review[0].warehouseDecisionId, { action:'ignored' }]]);
-  const result = buildComparison(purchases, scans, warehouse, 100, ignored);
+  const result = buildComparison(purchases, scans, warehouse, 100, ignored, 70);
   assert.equal(result.comparison[0].purchaseQuantity, 5);
   assert.equal(result.comparison[0].warehouseQuantity, 0);
   assert.equal(result.enough.length, 1);
@@ -484,16 +539,17 @@ test('isolated Excel parsers run sequentially', async t => {
   t.after(() => fs.rm(dir, { recursive:true, force:true }));
   const file = path.join(dir, 'warehouse.xlsx');
   const wb = new ExcelJS.Workbook(); const ws = wb.addWorksheet('Data');
-  ws.addRow(['Tên dự án','Mã Hàng','Tên Hàng','NCC','Số lượng đặt hàng','Hạn giao hàng','Ngày giao hàng','Số lượng đã về']);
-  ws.addRow(['MEC1 - Dự án','A-01','Tên hàng','NCC',1,'01/08/2026','02/08/2026',1]);
-  ws.addRow(['MEC1 - Dự án','A-01','Tên hàng','NCC',2,'01/08/2026','02/08/2026',0]);
-  ws.addRow(['Dự án nội bộ','B-01','Tên hàng khác','NCC',1,'01/08/2026','02/08/2026',1]);
-  ws.addRow(['','C-01','Tên hàng thiếu dự án','NCC',1,'01/08/2026','02/08/2026',1]);
+  ws.addRow(['Tên dự án','Mã Hàng','Tên Hàng','NCC','Mã PO','Số lượng đặt hàng','Hạn giao hàng','Ngày giao hàng','Số lượng đã về']);
+  ws.addRow(['MEC1 - Dự án','A-01','Tên hàng','NCC','PO-001',1,'01/08/2026','02/08/2026',1]);
+  ws.addRow(['MEC1 - Dự án','A-01','Tên hàng','NCC','PO-001',2,'01/08/2026','02/08/2026',0]);
+  ws.addRow(['Dự án nội bộ','B-01','Tên hàng khác','NCC','PO-002',1,'01/08/2026','02/08/2026',1]);
+  ws.addRow(['','C-01','Tên hàng thiếu dự án','NCC','PO-003',1,'01/08/2026','02/08/2026',1]);
   await wb.xlsx.writeFile(file);
   const result = await processWithWorker('warehouse', file);
   assert.equal(result.details.length, 2);
   assert.equal(result.rows.length, 1);
   assert.equal(result.rows[0].orderedQuantity, 3);
+  assert.equal(result.rows[0].poNumber, 'PO-001');
   assert.equal(result.rows[0].note, 'Gộp 2 dòng');
   assert.equal(result.warnings.length, 2);
   assert.match(result.warnings[0].note, /bỏ qua/);
@@ -506,15 +562,15 @@ test('isolated Excel parsers run sequentially', async t => {
   const wb = new ExcelJS.Workbook(); const ws = wb.addWorksheet('Sheet1');
   ws.addRow([]); ws.addRow(['Tên đơn vị :']); ws.addRow([]); ws.addRow([]);
   ws.addRow(['TỔNG HỢP TÌNH HÌNH ĐẶT HÀNG']);
-  ws.addRow(['STT','Mã hàng','Tên mặt hàng','DVT','Maker','Ngày giao hàng','Tình trạng']);
-  ws.addRow([1,'DES-MEC2205011-17-240102',new Date('2024-01-02'),'HW9Z-KL1','Cover','PCS','1,000.00']);
+  ws.addRow(['STT','Mã hàng','Tên mặt hàng','DVT','Maker','Ngày giao hàng','Tình trạng','Trễ hạn','Số lượng còn lại']);
+  ws.addRow([1,'DES-MEC2205011-17-240102',new Date('2024-01-02'),'HW9Z-KL1','Cover','PCS','1,000.00','1,000.00','IDEC']);
   await wb.xlsx.writeFile(file);
   const result = await processWithWorker('purchase', file);
   assert.equal(result.rows.length, 1);
   assert.equal(result.details.length, 1);
   assert.deepEqual(
-    { projectCode:result.rows[0].projectCode, purchaseOrder:result.rows[0].purchaseOrder, itemCode:result.rows[0].itemCode, itemName:result.rows[0].itemName, quantity:result.rows[0].quantity },
-    { projectCode:'MEC2205011', purchaseOrder:'DES-MEC2205011-17-240102', itemCode:'HW9Z-KL1', itemName:'Cover', quantity:1000 }
+    { projectCode:result.rows[0].projectCode, purchaseOrder:result.rows[0].purchaseOrder, itemCode:result.rows[0].itemCode, itemName:result.rows[0].itemName, supplier:result.rows[0].supplier, quantity:result.rows[0].quantity },
+    { projectCode:'MEC2205011', purchaseOrder:'DES-MEC2205011-17-240102', itemCode:'HW9Z-KL1', itemName:'Cover', supplier:'IDEC', quantity:1000 }
   );
  });
 

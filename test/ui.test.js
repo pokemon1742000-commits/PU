@@ -86,9 +86,11 @@ test('Job Code uses the bundled MKAC reference without a manual import row', () 
 
 test('sidebar exposes separate auto-match and confirmation thresholds', () => {
   assert.match(html, /id="threshold"[\s\S]*id="confirmationThreshold"/);
-  assert.match(html, /Dưới ngưỡng xác nhận sẽ được xem là các mã khác nhau/);
+  assert.match(html, /value="91"[\s\S]*value="90"/);
+  assert.match(html, /Dưới ngưỡng xác nhận sẽ tự động bỏ qua việc ghép và không đưa vào trang Xác Nhận/);
   assert.match(js, /confirmationThreshold:Number/);
-  assert.match(main, /let confirmationThreshold = 70/);
+  assert.match(main, /let comparisonThreshold = 91/);
+  assert.match(main, /let confirmationThreshold = 90/);
   assert.match(main, /confirmationThreshold = Math\.max\(0, Math\.min\([^\n]*comparisonThreshold - 1\)\)/);
   assert.match(css, /\.threshold-setting/);
 });
@@ -149,7 +151,7 @@ test('application branding hides the native menu and shows the logo with the cur
 
 test('application information dialog shows version-specific improvements and the GitHub project link', () => {
   assert.match(html, /id="infoDialog"[\s\S]*id="appVersion"[\s\S]*id="githubLink"/);
-  for (const version of ['1.0.5','1.0.4','1.0.3','1.0.2','1.0.1','1.0.0']) assert.match(html, new RegExp(`data-version="${version.replaceAll('.', '\\.')}"`));
+  for (const version of ['1.0.6','1.0.5','1.0.4','1.0.3','1.0.2','1.0.1','1.0.0']) assert.match(html, new RegExp(`data-version="${version.replaceAll('.', '\\.')}"`));
   assert.match(html, /Lịch sử cải tiến/);
   assert.match(html, /current-version-badge/);
   assert.match(js, /note\.dataset\.version===version/);
@@ -279,6 +281,7 @@ test('installed app exposes a silent GitHub update button and automated release 
 });
 
 test('warehouse key fields prefer one line with compact item names and wide notes', () => {
+  assert.match(js, /warehouse:.*\['poNumber','PO'\]/);
   assert.match(css, /data-table="warehouse"[\s\S]*data-column="supplier"/);
   assert.match(css, /data-table="warehouse"[\s\S]*data-column="itemName"[\s\S]*width: 195px/);
   assert.match(css, /data-table="warehouse"[\s\S]*data-column="note"[\s\S]*width: 190px/);

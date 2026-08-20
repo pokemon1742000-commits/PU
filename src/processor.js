@@ -71,6 +71,15 @@ function isHeader(row, required) {
 
 function headerMap(header) { return new Map(header.values.map((v, i) => [headerKey(v), i])); }
 function getBy(map, values, names) { for (const n of names) if (map.has(headerKey(n))) return values[map.get(headerKey(n))]; return ''; }
+function purchaseSupplier(map, values) {
+  const direct = clean(getBy(map, values, ['Nhà cung cấp', 'NCC', 'Supplier']));
+  if (direct) return direct;
+  const legacy = getBy(map, values, ['Số lượng còn lại']);
+  if (legacy instanceof Date) return '';
+  const text = clean(legacy);
+  if (!text || /^[-+]?\d[\d\s.,]*$/.test(text)) return '';
+  return text;
+}
 function projectCode(value) { const match = norm(value).match(/(?:^|[^A-Z0-9])((?:MEC|AUT)[A-Z0-9]*)/); return match ? match[1] : ''; }
 function canonicalProject(value) { return projectCode(value) || norm(value); }
 
@@ -109,8 +118,9 @@ async function processPurchases(files) {
         const itemCode = clean(getBy(map, r.values, ['ĐVT']));
         const marker = clean(getBy(map, r.values, ['Maker', 'Marker']));
         const quantity = number(getBy(map, r.values, ['Tình trạng']));
+        const supplier = purchaseSupplier(map, r.values);
         if (!purchaseOrder && !itemCode) continue;
-        out.push({ projectCode: projectCode(purchaseOrder), purchaseOrder, itemCode, itemName: marker, marker, quantity, sourceFile: path.basename(file), sourceSheet: ws.name || '', sourceRow: r.rowNo });
+        out.push({ projectCode: projectCode(purchaseOrder), purchaseOrder, itemCode, itemName: marker, marker, supplier, quantity, sourceFile: path.basename(file), sourceSheet: ws.name || '', sourceRow: r.rowNo });
       }
     }
     if (!hasSheet) throw new Error(`File ${path.basename(file)} không có sheet dữ liệu.`);
@@ -228,11 +238,12 @@ async function processWarehouse(files) {
   const out = [], warnings = [];
   const cols = {
     projectName: ['Tên dự án'], itemCode: ['Mã Hàng', 'Mã hàng'], itemName: ['Tên Hàng', 'Tên hàng'],
-    supplier: ['NCC'], orderedQuantity: ['Số lượng đặt hàng'], dueDate: ['Hạn giao hàng'], deliveryDate: ['Ngày giao hàng'], receivedQuantity: ['Số lượng đã về']
+    supplier: ['NCC'], poNumber: ['Mã PO', 'Số PO', 'PO', 'PO No', 'PO No.', 'PO Number', 'Mã đơn hàng'],
+    orderedQuantity: ['Số lượng đặt hàng'], dueDate: ['Hạn giao hàng'], deliveryDate: ['Ngày giao hàng'], receivedQuantity: ['Số lượng đã về']
   };
   for (const source of files) {
     const { file, sheets } = sourceSpec(source);
-    const required = Object.values(cols).map(x => x);
+    const required = Object.entries(cols).filter(([key]) => key !== 'poNumber').map(([, names]) => names);
     let hasSheet = false, foundHeader = false;
     for await (const ws of workbookSheets(file, sheets)) {
       hasSheet = true;
@@ -245,7 +256,7 @@ async function processWarehouse(files) {
         }
         const row = Object.fromEntries(Object.entries(cols).map(([k, names]) => [k, cellValue(getBy(map, r.values, names))]));
         if (!clean(row.projectName) && !clean(row.itemCode)) continue;
-        row.projectName = clean(row.projectName); row.itemCode = clean(row.itemCode); row.itemName = clean(row.itemName); row.supplier = clean(row.supplier);
+        row.projectName = clean(row.projectName); row.itemCode = clean(row.itemCode); row.itemName = clean(row.itemName); row.supplier = clean(row.supplier); row.poNumber = clean(row.poNumber);
         row.projectCode = projectCode(row.projectName);
         if (!row.projectCode) {
           warnings.push(warning('Nhập Kho', '', row.projectName || row.itemCode, `${ws.name || 'Sheet'} dòng ${r.rowNo}: bỏ qua vì Tên dự án không chứa mã MEC... hoặc AUT...`, file));
@@ -266,7 +277,7 @@ async function processWarehouse(files) {
 function mergeWarehouseRows(rows) {
   const groups = new Map();
   for (const row of rows) {
-    const key = [row.projectCode, row.itemCode, row.supplier, row.dueDate, row.deliveryDate].map(norm).join('|');
+    const key = [row.projectCode, row.itemCode, row.supplier, row.poNumber, row.dueDate, row.deliveryDate].map(norm).join('|');
     const count = Number(row.mergedRowCount) || 1;
     const old = groups.get(key);
     if (!old) {
@@ -299,12 +310,13 @@ function mergePurchaseRows(rows) {
     const key = [row.projectCode, row.itemCode].map(norm).join('|');
     const group = groups.get(key) || {
       ...row, quantity: 0, mergedRowCount: 0,
-      purchaseOrders: [], sourceFiles: [], sourceRows: [], sourceLocations: []
+      purchaseOrders: [], suppliers: [], sourceFiles: [], sourceRows: [], sourceLocations: []
     };
     group.quantity += number(row.quantity);
     group.mergedRowCount += Number(row.mergedRowCount) || 1;
     if (!group.itemName && row.itemName) group.itemName = row.itemName;
     if (!group.marker && row.marker) group.marker = row.marker;
+    if (row.supplier && !group.suppliers.some(value => norm(value) === norm(row.supplier))) group.suppliers.push(row.supplier);
     if (row.purchaseOrder && !group.purchaseOrders.includes(row.purchaseOrder)) group.purchaseOrders.push(row.purchaseOrder);
     if (row.sourceFile && !group.sourceFiles.includes(row.sourceFile)) group.sourceFiles.push(row.sourceFile);
     if (row.sourceRow !== undefined && row.sourceRow !== '' && !group.sourceRows.includes(row.sourceRow)) group.sourceRows.push(row.sourceRow);
@@ -326,11 +338,12 @@ function mergePurchaseRows(rows) {
     return {
       ...group,
       purchaseOrder: group.purchaseOrders.join('; '),
+      supplier: group.suppliers.join('; '),
       sourceFile: group.sourceFiles.join('; '),
       sourceRow: group.sourceRows.join(', '),
       note
     };
-  }).map(({ purchaseOrders, sourceFiles, sourceRows, ...row }) => row);
+  }).map(({ purchaseOrders, suppliers, sourceFiles, sourceRows, ...row }) => row);
   ensureTotals('Mua Hàng', rows || [], merged, ['quantity']);
   return merged;
 }
@@ -437,6 +450,22 @@ function latestWarehouseDate(rows) {
   return rows.map(row => clean(row.deliveryDate)).filter(Boolean)
     .sort((a, b) => dateSortValue(b).localeCompare(dateSortValue(a)))[0] || '';
 }
+function warehouseValues(rows, field) {
+  return [...new Set(rows.map(row => clean(row[field])).filter(Boolean))].join('; ');
+}
+function warehouseExportMetadata(rows, purchaseQuantity, warehouseQuantity, scanQuantity) {
+  const purchase = number(purchaseQuantity), received = number(warehouseQuantity), scanned = number(scanQuantity);
+  const supplier = warehouseValues(rows, 'supplier');
+  const poNumber = warehouseValues(rows, 'poNumber');
+  const dueDate = warehouseValues(rows, 'dueDate');
+  const warehouseOrderPlaced = rows.some(row => number(row.orderedQuantity) > 0 || clean(row.poNumber));
+  let operator = '';
+  if (scanned < purchase - 1e-8) {
+    if (received >= purchase - 1e-8 && purchase > 0) operator = 'Kho';
+    else operator = warehouseOrderPlaced ? (supplier || 'PU check') : 'PU check';
+  }
+  return { supplier, poNumber, dueDate, warehouseOrderPlaced, operator };
+}
 function supplierSummary(rows, purchaseQuantity, scanQuantity) {
   const suppliers = new Map();
   for (const row of rows) {
@@ -515,11 +544,34 @@ function candidateOptions(target, rows, field) {
   return options;
 }
 
+function withoutGcSuffix(value) {
+  const code = norm(value);
+  return code.endsWith('_GC') ? code.slice(0, -3) : code;
+}
+
+function gcSuffixMatch(target, rows, field) {
+  const drawingCode = norm(target);
+  const drawingHasSuffix = drawingCode.endsWith('_GC');
+  const drawingBase = withoutGcSuffix(drawingCode);
+  if (!drawingBase) return null;
+  return rows.find(row => {
+    const sourceCode = norm(row[field]);
+    return sourceCode !== drawingCode
+      && (drawingHasSuffix || sourceCode.endsWith('_GC'))
+      && withoutGcSuffix(sourceCode) === drawingBase;
+  }) || null;
+}
+
 function matchSource(source, scan, rows, field, threshold, decisions, confirmationThreshold) {
   const drawingCode = norm(scan.drawingCode);
   const options = candidateOptions(scan.drawingCode, rows, field);
   const exact = options.find(option => option.code === drawingCode);
   if (exact) return { code: exact.code, score: 100, kind: 'exact', options:[exact] };
+  const suffixMatch = gcSuffixMatch(scan.drawingCode, rows, field);
+  if (suffixMatch) {
+    const option = { code:norm(suffixMatch[field]), score:100 };
+    return { code:option.code, score:100, kind:'auto', options:[option] };
+  }
   const best = options[0];
   if (!best) return { code:'', score:0, kind:'different', options:[] };
   const decisionKey = `${source}|${canonicalProject(scan.projectCode)}|${drawingCode}|${best.code}`;
@@ -549,7 +601,7 @@ function comparisonMatchStatus(purchaseMatch, warehouseMatch) {
   return 'Khớp chính xác';
 }
 
-function buildComparison(purchases, scans, warehouse, threshold = 95, decisions = new Map(), confirmationThreshold = 70, purchaseReplacements = []) {
+function buildComparison(purchases, scans, warehouse, threshold = 91, decisions = new Map(), confirmationThreshold = 90, purchaseReplacements = []) {
   const comparison = [], review = [];
   const usedPurchaseKeys = new Set(), usedWarehouseKeys = new Set(), reservedPurchaseKeys = new Set(), reservedWarehouseKeys = new Set();
   let id = 1;
@@ -588,7 +640,11 @@ function buildComparison(purchases, scans, warehouse, threshold = 95, decisions 
     const comparisonReady = [purchaseMatch, warehouseMatch].every(match => ['exact', 'auto', 'confirmed', 'ignored', 'different'].includes(match.kind));
     const scanResult = comparisonReady ? status(scanQuantity, purchaseQuantity) : null;
     const warehouseResult = comparisonReady ? status(warehouseQuantity, purchaseQuantity) : null;
-    const supplier = [...new Set(matchedWarehouse.map(row => clean(row.supplier)).filter(Boolean))].join('; ');
+    const warehouseMetadata = warehouseExportMetadata(matchedWarehouse, purchaseQuantity, warehouseQuantity, scanQuantity);
+    const purchaseSupplierName = warehouseValues(matchedPurchases, 'supplier');
+    const supplier = warehouseMetadata.supplier || purchaseSupplierName;
+    const operator = warehouseMetadata.operator === 'PU check' && warehouseMetadata.warehouseOrderPlaced && purchaseSupplierName
+      ? purchaseSupplierName : warehouseMetadata.operator;
     const supplierNote = supplierSummary(matchedWarehouse, purchaseQuantity, scanQuantity);
     const quantityNote = comparisonReady
       ? quantityComparisonNote(purchaseQuantity, warehouseQuantity, scanQuantity)
@@ -606,6 +662,8 @@ function buildComparison(purchases, scans, warehouse, threshold = 95, decisions 
       quantityNote, supplierNote,
       note: `${quantityNote}\n${supplierNote}`,
       supplier,
+      operator, poNumber:warehouseMetadata.poNumber, dueDate:warehouseMetadata.dueDate,
+      warehouseOrderPlaced:warehouseMetadata.warehouseOrderPlaced,
       maker: scan.manufacturer || '',
       scanDate: scan.scanDate || '', warehouseDate: latestWarehouseDate(matchedWarehouse),
       matchStatus
@@ -643,7 +701,11 @@ function buildComparison(purchases, scans, warehouse, threshold = 95, decisions 
     const changedPurchase = purchaseRows.find(row => clean(row.originalItemCode));
     const purchaseQuantity = sum(purchaseRows, 'quantity');
     const warehouseQuantity = sum(warehouseRows, 'receivedQuantity');
-    const supplier = [...new Set(warehouseRows.map(row => clean(row.supplier)).filter(Boolean))].join('; ');
+    const warehouseMetadata = warehouseExportMetadata(warehouseRows, purchaseQuantity, warehouseQuantity, 0);
+    const purchaseSupplierName = warehouseValues(purchaseRows, 'supplier');
+    const supplier = warehouseMetadata.supplier || purchaseSupplierName;
+    const operator = warehouseMetadata.operator === 'PU check' && warehouseMetadata.warehouseOrderPlaced && purchaseSupplierName
+      ? purchaseSupplierName : warehouseMetadata.operator;
     const supplierNote = supplierSummary(warehouseRows, purchaseQuantity, 0);
     const hasPurchasedQuantity = purchaseQuantity > 0;
     const hasWarehouseQuantity = warehouseQuantity > 0;
@@ -665,6 +727,8 @@ function buildComparison(purchases, scans, warehouse, threshold = 95, decisions 
       warehouseStatus:warehouseResult.status, scanStatus:purchaseQuantity > 0 ? `Thiếu (${purchaseQuantity})` : 'Không có dữ liệu quét mã',
       warehouseDelta:warehouseResult.delta, scanDelta:-purchaseQuantity,
       quantityNote, supplierNote, note:`${quantityNote}\n${supplierNote}`,
+      operator, poNumber:warehouseMetadata.poNumber, dueDate:warehouseMetadata.dueDate,
+      warehouseOrderPlaced:warehouseMetadata.warehouseOrderPlaced,
       maker:'', scanDate:'', warehouseDate:latestWarehouseDate(warehouseRows),
       matchStatus:'Không có trong file Quét Mã', missingScan:Boolean(purchaseRows.length || warehouseRows.length)
     });

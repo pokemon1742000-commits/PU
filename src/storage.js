@@ -125,19 +125,21 @@ class Database {
       if (!current) {
         const mergedRowCount = Number(row.mergedRowCount) || 1;
         const sourceLocations = row.sourceLocations?.length ? [...row.sourceLocations] : (location ? [location] : []);
-        imported.set(key, { ...row, quantity: Number(row.quantity) || 0, mergedRowCount, sourceLocations });
+        imported.set(key, { ...row, quantity: Number(row.quantity) || 0, mergedRowCount, sourceLocations, suppliers:row.supplier ? [row.supplier] : [] });
         continue;
       }
       current.quantity += Number(row.quantity) || 0;
       current.mergedRowCount += Number(row.mergedRowCount) || 1;
+      if (row.supplier && !current.suppliers.some(value => String(value).trim().toUpperCase() === String(row.supplier).trim().toUpperCase())) current.suppliers.push(row.supplier);
       if (location && !current.sourceLocations.includes(location)) current.sourceLocations.push(location);
     }
     const groupedIncoming = [...imported.values()].map(row => ({
       ...row,
+      supplier:row.suppliers.join('; '),
       note: row.mergedRowCount > 1
         ? `Gộp ${row.mergedRowCount} dòng${row.sourceLocations.length ? `: ${row.sourceLocations.join('; ')}` : ''}`
         : (row.note || '')
-    }));
+    })).map(({ suppliers, ...row }) => row);
     const incomingTotal = incoming.reduce((total, row) => total + (Number(row.quantity) || 0), 0);
     const groupedTotal = groupedIncoming.reduce((total, row) => total + (Number(row.quantity) || 0), 0);
     if (Math.abs(incomingTotal - groupedTotal) > 1e-8) {
@@ -150,7 +152,7 @@ class Database {
     for (const row of groupedIncoming) {
       const key = this.key(row), old = map.get(key);
       if (!old) { map.set(key, row); added++; }
-      else if (['projectCode','purchaseOrder','itemCode','itemName','marker','quantity','mergedRowCount','note'].some(field => old[field] !== row[field])) {
+      else if (['projectCode','purchaseOrder','itemCode','itemName','marker','supplier','quantity','mergedRowCount','note'].some(field => old[field] !== row[field])) {
         map.set(key, { ...old, ...row, previousQuantity: old.quantity, updatedAt: new Date().toISOString() }); updated++;
       } else unchanged++;
     }
@@ -179,9 +181,30 @@ class Database {
       ['projectCode','drawingCode','manufacturer','scanDate'],
       ['quantity','warehouseDate','receiptCode','reference','scanDateSort','manualReview']);
   }
-  mergeWarehouse(rows) {
-    return this.mergeDataset(this.warehouseFile, rows,
-      ['projectCode','itemCode','supplier','dueDate','deliveryDate'],
+  async mergeWarehouse(rows) {
+    const incoming = rows || [];
+    const legacyKey = row => ['projectCode','itemCode','supplier','dueDate','deliveryDate']
+      .map(field => String(row[field] ?? '').trim().toUpperCase()).join('|');
+    const incomingByLegacyKey = new Map();
+    for (const row of incoming) {
+      const key = legacyKey(row);
+      if (!incomingByLegacyKey.has(key)) incomingByLegacyKey.set(key, []);
+      incomingByLegacyKey.get(key).push(row);
+    }
+    const existing = await this.readWarehouse();
+    let migrated = false;
+    const upgraded = [];
+    for (const row of existing) {
+      if (String(row.poNumber || '').trim()) { upgraded.push(row); continue; }
+      const candidates = incomingByLegacyKey.get(legacyKey(row)) || [];
+      const poNumbers = [...new Set(candidates.map(candidate => String(candidate.poNumber || '').trim()).filter(Boolean))];
+      if (!poNumbers.length) { upgraded.push(row); continue; }
+      migrated = true;
+      if (poNumbers.length === 1) upgraded.push({ ...row, poNumber:poNumbers[0] });
+    }
+    if (migrated) await this.atomicWrite(this.warehouseFile, upgraded);
+    return this.mergeDataset(this.warehouseFile, incoming,
+      ['projectCode','itemCode','supplier','poNumber','dueDate','deliveryDate'],
       ['projectName','itemName','orderedQuantity','receivedQuantity','mergedRowCount','note']);
   }
   async backup() {

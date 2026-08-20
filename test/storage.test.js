@@ -21,6 +21,9 @@ test('incremental database adds, updates, and avoids duplicates', async t => {
   assert.equal(d.stats.updated, 1);
   assert.equal(d.rows.length, 1);
   assert.equal(d.rows[0].marker, 'Tên mới');
+  const e = await db.mergePurchases([{...base, marker:'Tên mới', itemName:'Tên mới', supplier:'IDEC', quantity:3}]);
+  assert.equal(e.stats.updated, 1);
+  assert.equal(e.rows[0].supplier, 'IDEC');
 });
 
 test('persists, updates, and deletes project-scoped purchase code links', async t => {
@@ -118,8 +121,10 @@ test('scan clears with the working session while warehouse remains a long-term d
 
   const warehouseA = { projectCode:'MEC1', itemCode:'A-01', supplier:'NCC', dueDate:'01/08/2026', deliveryDate:'02/08/2026', orderedQuantity:3, receivedQuantity:1 };
   await db.mergeWarehouse([warehouseA]);
-  const warehouse = await db.mergeWarehouse([{ ...warehouseA, receivedQuantity:3 }]);
+  const warehouse = await db.mergeWarehouse([{ ...warehouseA, poNumber:'PO-001', receivedQuantity:3 }]);
   assert.equal(warehouse.stats.updated, 1);
+  assert.equal(warehouse.rows.length, 1);
+  assert.equal((await db.readWarehouse())[0].poNumber, 'PO-001');
   assert.equal((await db.readWarehouse())[0].receivedQuantity, 3);
 
   await db.mergeRawScans([{ sourceFile:'scan.xlsx', sourceSheet:'Data', sourceRow:1, quantity:3 }]);

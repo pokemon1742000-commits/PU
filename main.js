@@ -10,8 +10,8 @@ const { Database } = require('./src/storage');
 let win;
 let session = emptySession();
 let database;
-let comparisonThreshold = 95;
-let confirmationThreshold = 70;
+let comparisonThreshold = 91;
+let confirmationThreshold = 90;
 let updateState = { status:'idle', message:'Sẵn sàng kiểm tra cập nhật', percent:0, currentVersion:app.getVersion() };
 const DEFAULT_PAGE_SIZE = 100;
 const BUILT_IN_JOB_CODE_FILE = path.join(app.isPackaged ? process.resourcesPath : __dirname, 'assets', 'MKAC Monthly Timesheet.xlsx');
@@ -86,7 +86,7 @@ function registerIpc() {
   ipcMain.handle('comparison:run', async (_e, settings) => {
     const autoThreshold = typeof settings === 'object' ? settings.autoThreshold : settings;
     const confirmThreshold = typeof settings === 'object' ? settings.confirmationThreshold : confirmationThreshold;
-    runComparison(Number(autoThreshold) || 95, Number(confirmThreshold));
+    runComparison(Number(autoThreshold) || 91, Number(confirmThreshold));
     return summary();
   });
   ipcMain.handle('review:resolve', async (_e, payload) => {
@@ -321,9 +321,9 @@ function refreshValidatedSession() {
   session.warnings = [...purchaseFormatWarnings, ...purchaseWarnings];
 }
 
-function runComparison(threshold = 95, confirmThreshold = confirmationThreshold) {
-  comparisonThreshold = Number(threshold) || 95;
-  confirmationThreshold = Math.max(0, Math.min(Number.isFinite(Number(confirmThreshold)) ? Number(confirmThreshold) : 70, comparisonThreshold - 1));
+function runComparison(threshold = 91, confirmThreshold = confirmationThreshold) {
+  comparisonThreshold = Number(threshold) || 91;
+  confirmationThreshold = Math.max(0, Math.min(Number.isFinite(Number(confirmThreshold)) ? Number(confirmThreshold) : 90, comparisonThreshold - 1));
   const out = buildComparison(session.purchase, session.scans, session.warehouse, comparisonThreshold, session.decisions || new Map(), confirmationThreshold, session.purchaseReplacements);
   Object.assign(session, out);
 }
