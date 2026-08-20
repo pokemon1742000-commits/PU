@@ -185,20 +185,31 @@ class Database {
       ['projectName','itemName','orderedQuantity','receivedQuantity','mergedRowCount','note']);
   }
   async backup() {
-    try { const data = await fs.readFile(this.purchaseFile); const stamp = new Date().toISOString().replace(/[:.]/g, '-'); await fs.writeFile(path.join(this.backupDir, `purchases-${stamp}.json`), data); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    for (const [file, name] of [[this.purchaseFile, 'purchases'], [this.warehouseFile, 'warehouse']]) {
+      try { await fs.writeFile(path.join(this.backupDir, `${name}-${stamp}.json`), await fs.readFile(file)); }
+      catch (e) { if (e.code !== 'ENOENT') throw e; }
+    }
   }
   async clearWorkingSession() {
+    const state = await this.readWorkingSession();
+    const persistentState = {
+      sources:(state.sources || []).filter(source => source.kind === 'warehouse'),
+      formatWarnings:(state.formatWarnings || []).filter(warning => warning.source === 'Nhập Kho')
+    };
     await Promise.all([
       this.atomicWrite(this.scanFile, []), this.atomicWrite(this.scanRawFile, []),
-      this.atomicWrite(this.warehouseFile, []), this.atomicWrite(this.warehouseRawFile, []),
-      this.atomicWrite(this.workingSessionFile, {})
+      this.atomicWrite(this.workingSessionFile, persistentState)
     ]);
   }
   async backupAndClear() {
     await this.backup();
     await Promise.all([
       this.atomicWrite(this.purchaseFile, []), this.atomicWrite(this.purchaseRawFile, []),
-      this.atomicWrite(this.purchaseReplacementFile, []), this.clearWorkingSession()
+      this.atomicWrite(this.purchaseReplacementFile, []),
+      this.atomicWrite(this.scanFile, []), this.atomicWrite(this.scanRawFile, []),
+      this.atomicWrite(this.warehouseFile, []), this.atomicWrite(this.warehouseRawFile, []),
+      this.atomicWrite(this.workingSessionFile, {})
     ]);
   }
 }

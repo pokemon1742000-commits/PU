@@ -28,19 +28,21 @@ function bind(){
   $('#rawToggle').onclick=async()=>{rawMode=!rawMode;updateRawToggle();await loadTablePage(1)};
   $('#warningShortcut').onclick=async()=>{const target=activeTable==='warnings'?'purchase':'warnings';show('data',$('.nav-item[data-open-table="purchase"]'));await showTable(target)};
   $('#exportBtn').onclick=async()=>run(async()=>{const r=await window.api.exportExcel(['comparison']);if(!r.canceled)toast(`Đã xuất: ${r.path}`)},null);
-  $('#infoBtn').onclick=()=>$('#infoDialog').showModal();
+  $('#infoBtn').onclick=()=>{showInfoPanel('releaseInfo');$('#infoDialog').showModal()};
+  $$('.info-tab').forEach(button=>button.onclick=()=>showInfoPanel(button.dataset.infoPanel));
   $('#closeInfo').onclick=()=>$('#infoDialog').close();
   $('#infoDialog').onclick=event=>{if(event.target===$('#infoDialog'))$('#infoDialog').close()};
   $('#githubLink').onclick=()=>run(()=>window.api.openExternal('https://github.com/pokemon1742000-commits/PU'),null);
   $('#exportPageBtn').onclick=$('#exportBtn').onclick;
   $('#updateBtn').onclick=checkForUpdates;
   window.api.onUpdateStatus(renderUpdateStatus);
-  $('#clearSession').onclick=async()=>{if(confirm('Bạn có chắc muốn xóa dữ liệu của phiên hiện tại? Dữ liệu Mua Hàng sẽ được giữ lại.')) await run(async()=>refresh(await window.api.clearSession()),'Đã clear phiên làm việc');};
+  $('#clearSession').onclick=async()=>{if(confirm('Bạn có chắc muốn xóa dữ liệu Quét Mã và các xác nhận? Dữ liệu Mua Hàng và Nhập Kho sẽ được giữ lại.')) await run(async()=>refresh(await window.api.clearSession()),'Đã clear phiên làm việc');};
   $('#deleteDatabase').onclick=()=>startDelete();
   $('#confirmDelete').onclick=e=>{e.preventDefault();advanceDelete();};
   $$('.theme-dot').forEach(b=>b.onclick=()=>applyTheme(b.dataset.theme));
   window.addEventListener('resize',updateNavIndicator);
 }
+function showInfoPanel(panelId){$$('.info-panel').forEach(panel=>panel.hidden=panel.id!==panelId);$$('.info-tab').forEach(button=>button.classList.toggle('active',button.dataset.infoPanel===panelId))}
 async function checkForUpdates(){
   const button=$('#updateBtn');
   button.disabled=true;

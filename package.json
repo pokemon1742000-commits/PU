@@ -1,6 +1,6 @@
 {
   "name": "doi-chieu-du-lieu",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Ứng dụng đối chiếu dữ liệu mua hàng, quét mã và nhập kho",
   "repository": {
     "type": "git",
@@ -11,7 +11,7 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test",
-    "check": "node --check main.js && node --check preload.js && node --check src/processor.js && node --check src/file-worker.js && node --check src/exporter.js && node --check renderer/app.js",
+    "check": "node --check main.js && node --check preload.js && node --check src/processor.js && node --check src/file-worker.js && node --check src/exporter.js && node --check renderer/app.js && node --check scripts/guide-preload.js && node --check scripts/generate-guide-images.js",
     "dist": "electron-builder --win portable",
     "publish": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish.ps1",
     "release:auto": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-auto.ps1"
@@ -34,6 +34,7 @@
       "src/**/*",
       "renderer/**/*",
       "assets/app-logo.png",
+      "assets/guide-actual-*.png",
       "package.json"
     ],
     "extraResources": [

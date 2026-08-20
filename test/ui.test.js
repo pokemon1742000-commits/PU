@@ -68,6 +68,8 @@ test('scan and warehouse imports persist and merge incrementally across app rest
   assert.match(main, /database\.clearWorkingSession\(\)/);
   assert.match(main, /decisions:new Map\(workingSession\.decisions \|\| \[\]\)/);
   assert.match(js, /thêm \$\{stats\.added\}, cập nhật \$\{stats\.updated\}/);
+  assert.match(js, /Dữ liệu Mua Hàng và Nhập Kho sẽ được giữ lại/);
+  assert.match(main, /database\.clearWorkingSession\(\)[\s\S]*database\.readWarehouse\(\)/);
 });
 
 test('Job Code uses the bundled MKAC reference without a manual import row', () => {
@@ -147,7 +149,7 @@ test('application branding hides the native menu and shows the logo with the cur
 
 test('application information dialog shows version-specific improvements and the GitHub project link', () => {
   assert.match(html, /id="infoDialog"[\s\S]*id="appVersion"[\s\S]*id="githubLink"/);
-  for (const version of ['1.0.2','1.0.1','1.0.0']) assert.match(html, new RegExp(`data-version="${version.replaceAll('.', '\\.')}"`));
+  for (const version of ['1.0.5','1.0.4','1.0.3','1.0.2','1.0.1','1.0.0']) assert.match(html, new RegExp(`data-version="${version.replaceAll('.', '\\.')}"`));
   assert.match(html, /Lịch sử cải tiến/);
   assert.match(html, /current-version-badge/);
   assert.match(js, /note\.dataset\.version===version/);
@@ -157,6 +159,18 @@ test('application information dialog shows version-specific improvements and the
   assert.match(main, /appVersion: app\.getVersion\(\)/);
   assert.match(main, /ipcMain\.handle\('external:open'/);
   assert.match(main, /shell\.openExternal\(url\)/);
+});
+
+test('information dialog includes an illustrated guide for every main action', () => {
+  assert.match(html, /data-info-panel="releaseInfo"/);
+  assert.match(html, /data-info-panel="guideInfo"/);
+  assert.match(html, /id="guideInfo"[\s\S]*guide-actual-controls\.png[\s\S]*guide-actual-confirm\.png[\s\S]*guide-actual-results\.png/);
+  for (const label of ['Mua Hàng','Nhập Kho','Quét Mã','Đổi mã đã duyệt PR','Clear dữ liệu phiên','Xóa database','Update','Xuất Excel']) assert.match(html, new RegExp(label));
+  assert.match(js, /function showInfoPanel\(panelId\)/);
+  assert.match(css, /\.guide-step/);
+  assert.match(css, /\.guide-actions/);
+  for (const file of ['guide-actual-controls.png','guide-actual-confirm.png','guide-actual-results.png']) assert.equal(fs.existsSync(path.join(__dirname, '..', 'assets', file)), true);
+  assert.equal(packageJson.build.files.includes('assets/guide-actual-*.png'), true);
 });
 
 test('raw-data eye control is placed below the table heading', () => {

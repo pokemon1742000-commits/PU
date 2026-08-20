@@ -116,10 +116,11 @@ function registerIpc() {
   ipcMain.handle('data:rows', (_e, name, options) => rowsFor(name, options));
   ipcMain.handle('session:clear', async () => {
     await database.clearWorkingSession();
-    const [purchaseAll, purchaseDetails, purchaseReplacements, jobCodeReference] = await Promise.all([
-      database.readPurchases(), database.readRawPurchases(), database.readPurchaseReplacements(), readBuiltInJobCodeReference()
+    const [purchaseAll, purchaseDetails, purchaseReplacements, warehouse, warehouseDetails, workingSession, jobCodeReference] = await Promise.all([
+      database.readPurchases(), database.readRawPurchases(), database.readPurchaseReplacements(),
+      database.readWarehouse(), database.readRawWarehouse(), database.readWorkingSession(), readBuiltInJobCodeReference()
     ]);
-    session = sessionWithBuiltInJobCodes({ ...emptySession(), purchaseAll, purchaseDetails, purchaseReplacements }, jobCodeReference);
+    session = sessionWithBuiltInJobCodes({ ...emptySession(), purchaseAll, purchaseDetails, purchaseReplacements, warehouse, warehouseDetails, formatWarnings:workingSession.formatWarnings || [], sources:workingSession.sources || [] }, jobCodeReference);
     refreshValidatedSession();
     return summary();
   });

@@ -101,7 +101,7 @@ test('raw purchase and Job Code rows accumulate without duplicating a reimported
   assert.deepEqual(jobs.map(row => row.code), ['MEC1','MEC2']);
 });
 
-test('scan and warehouse data persist incrementally until the working session is cleared', async t => {
+test('scan clears with the working session while warehouse remains a long-term database', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'working-session-'));
   t.after(() => fs.rm(dir, { recursive:true, force:true }));
   const db = new Database(dir); await db.init();
@@ -124,13 +124,24 @@ test('scan and warehouse data persist incrementally until the working session is
 
   await db.mergeRawScans([{ sourceFile:'scan.xlsx', sourceSheet:'Data', sourceRow:1, quantity:3 }]);
   await db.mergeRawWarehouse([{ sourceFile:'warehouse.xlsx', sourceSheet:'Data', sourceRow:2, receivedQuantity:3 }]);
-  await db.writeWorkingSession({ sources:[{ kind:'scan', file:'scan.xlsx' }], decisions:[['MEC1|A-01', { action:'ignored' }]] });
-  assert.equal((await db.readWorkingSession()).sources.length, 1);
+  await db.writeWorkingSession({
+    sources:[{ kind:'scan', file:'scan.xlsx' }, { kind:'warehouse', file:'warehouse.xlsx' }],
+    formatWarnings:[{ source:'Quét Mã', note:'scan' }, { source:'Nhập Kho', note:'warehouse' }],
+    decisions:[['MEC1|A-01', { action:'ignored' }]]
+  });
+  assert.equal((await db.readWorkingSession()).sources.length, 2);
 
   await db.clearWorkingSession();
   assert.deepEqual(await db.readScans(), []);
-  assert.deepEqual(await db.readWarehouse(), []);
+  assert.equal((await db.readWarehouse())[0].receivedQuantity, 3);
   assert.deepEqual(await db.readRawScans(), []);
+  assert.equal((await db.readRawWarehouse())[0].receivedQuantity, 3);
+  assert.deepEqual(await db.readWorkingSession(), {
+    sources:[{ kind:'warehouse', file:'warehouse.xlsx' }],
+    formatWarnings:[{ source:'Nhập Kho', note:'warehouse' }]
+  });
+
+  await db.backupAndClear();
+  assert.deepEqual(await db.readWarehouse(), []);
   assert.deepEqual(await db.readRawWarehouse(), []);
-  assert.deepEqual(await db.readWorkingSession(), {});
 });
