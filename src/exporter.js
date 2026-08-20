@@ -1,7 +1,7 @@
 const ExcelJS = require('exceljs');
 
 const projectReportDefinition = ['STT','Mã dự án','Mã hàng','Tên hàng','Số lượng BOOM','Số liệu XK','Maker','Ngày bắn code','Ngày nhập kho','Số lượng nhập kho','Tình trạng','Note','Người Vận Hành','Mã PO','Hạn Giao Hàng','Note đổi mã','Đổi PR'];
-const statusOptions = ['OK','Chưa về','Chưa về đủ','Đã về','Chưa bắn code'];
+const statusOptions = ['OK','Chưa về','Chưa về đủ','Đã về','Chưa bắn code','Check lại','Hủy','Tồn','Common'];
 
 async function exportWorkbook(file, _selected, session) {
   const rows = session.comparison || [];
@@ -41,12 +41,14 @@ function formatProjectReportSheet(ws, rows) {
     header.getCell(col).fill = fill(col <= 5 ? 'FF92D050' : 'FFFFC000');
   }
   rows.forEach((row, index) => {
-    const shortage = isShortage(row);
+    const statusValue = exportStatus(row);
+    const showOrderDetails = ['Chưa về','Chưa về đủ'].includes(statusValue);
+    const operatorValue = exportOperator(row);
     const output = ws.addRow([
       index + 1, row.projectCode, row.drawingCode, row.itemName,
       row.purchaseQuantity, row.scanQuantity, row.maker, row.scanDate,
-      row.warehouseDate, row.warehouseQuantity, exportStatus(row), exportNote(row), exportOperator(row),
-      shortage ? (row.poNumber || '') : '', shortage ? (row.dueDate || '') : '', '', ''
+      row.warehouseDate, row.warehouseQuantity, statusValue, exportNote(row), operatorValue,
+      showOrderDetails ? (row.poNumber || '') : '', showOrderDetails ? (row.dueDate || '') : '', '', ''
     ]);
     output.font = { name:'Aptos Narrow', size:11 };
     output.alignment = { vertical:'top' };
@@ -55,6 +57,8 @@ function formatProjectReportSheet(ws, rows) {
       errorTitle:'Tình trạng không hợp lệ', error:'Hãy chọn một tình trạng trong danh sách.',
       formulae:[`"${statusOptions.join(',')}"`]
     };
+    if (operatorValue === 'Kho') output.getCell(13).fill = fill('FFD9EAF7');
+    else if (operatorValue === 'PU check') output.getCell(13).fill = fill('FFFFE5CC');
     output.getCell(1).font = { name:'Aptos Narrow', size:11, bold:true };
     output.getCell(2).font = { name:'Aptos Narrow', size:11, bold:true };
     if (row.originalItemCode && row.replacementItemCode) {
@@ -94,26 +98,22 @@ function exportNote(row) {
   return '';
 }
 
-function isShortage(row) {
-  return numeric(row.scanQuantity) < numeric(row.purchaseQuantity) - 1e-8;
-}
-
 function quantityValue(value) {
   return Number(Number(value || 0).toFixed(6));
 }
 
 function exportStatus(row) {
   const purchase = numeric(row.purchaseQuantity), scanned = numeric(row.scanQuantity), received = numeric(row.warehouseQuantity);
-  if (Math.abs(scanned - purchase) < 1e-8) return 'OK';
+  if (purchase <= 1e-8 && (scanned > 1e-8 || received > 1e-8)) return 'Check lại';
+  if (scanned >= purchase - 1e-8) return 'OK';
   if (received <= 1e-8) return 'Chưa về';
   if (received < purchase - 1e-8) return 'Chưa về đủ';
-  if (scanned < purchase - 1e-8) return 'Chưa bắn code';
-  return 'Đã về';
+  return 'Chưa bắn code';
 }
 
 function exportOperator(row) {
   const purchase = numeric(row.purchaseQuantity), scanned = numeric(row.scanQuantity), received = numeric(row.warehouseQuantity);
-  if (scanned > purchase + 1e-8) return 'Kho';
+  if (purchase <= 1e-8 && (scanned > 1e-8 || received > 1e-8)) return 'PU check';
   if (scanned >= purchase - 1e-8) return '';
   if (received >= purchase - 1e-8 && purchase > 0) return 'Kho';
   const hasWarehouseOrder = row.warehouseOrderPlaced === true || Boolean(row.poNumber || row.dueDate || row.supplier || received > 0);

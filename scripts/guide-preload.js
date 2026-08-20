@@ -15,7 +15,7 @@ const rows = {
 };
 
 contextBridge.exposeInMainWorld('api', {
-  getState: async () => ({ counts:{ purchase:305364, scans:128, warehouse:8421, comparison:130, enough:96, shortage:21, excess:13, review:1, warnings:2 }, rawCounts:{ purchase:305364, scan:138, warehouse:8500, jobCodes:2156, warnings:305364 }, sources:[], autoThreshold:91, confirmationThreshold:90, purchaseReplacements:[], appVersion:'1.0.6' }),
+  getState: async () => ({ counts:{ purchase:305364, scans:128, warehouse:8421, comparison:130, enough:96, shortage:21, excess:13, review:1, warnings:2 }, rawCounts:{ purchase:305364, scan:138, warehouse:8500, jobCodes:2156, warnings:305364 }, sources:[], autoThreshold:91, confirmationThreshold:90, purchaseReplacements:[], appVersion:'1.0.7' }),
   getRows: async name => { const data=rows[name] || []; return { rows:data, page:1, pageSize:100, total:data.length, totalPages:1 }; },
   onUpdateStatus: () => () => {}, openExternal:async()=>true, checkForUpdates:async()=>({ status:'current' }),
   pickFiles:async()=>({ canceled:true }), loadFiles:async()=>({ canceled:true }), runComparison:async()=>({}),

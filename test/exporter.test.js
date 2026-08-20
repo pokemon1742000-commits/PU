@@ -27,9 +27,9 @@ test('comparison export follows the single-sheet template, excludes confirmation
   assert.deepEqual(sheet.getRow(9).values.slice(1), ['STT','Mã dự án','Mã hàng','Tên hàng','Số lượng BOOM','Số liệu XK','Maker','Ngày bắn code','Ngày nhập kho','Số lượng nhập kho','Tình trạng','Note','Người Vận Hành','Mã PO','Hạn Giao Hàng','Note đổi mã','Đổi PR']);
   assert.deepEqual(sheet.getRow(10).values.slice(1), [1,'MEC001','DWG-1','Item',3,1,'Maker A','15/Aug','14/08/2026',2,'Chưa về đủ','Thiếu 2','NCC A','PO-1','20/08/2026','','']);
   assert.equal(sheet.getCell('K10').dataValidation.type, 'list');
-  assert.equal(sheet.getCell('K10').dataValidation.formulae[0], '"OK,Chưa về,Chưa về đủ,Đã về,Chưa bắn code"');
+  assert.equal(sheet.getCell('K10').dataValidation.formulae[0], '"OK,Chưa về,Chưa về đủ,Đã về,Chưa bắn code,Check lại,Hủy,Tồn,Common"');
   assert.equal(sheet.getCell('L11').value, 'Thừa 2');
-  assert.equal(sheet.getCell('M11').value, 'Kho');
+  assert.equal(sheet.getCell('M11').value || '', '');
   assert.equal(sheet.getCell('N11').value || '', '');
   assert.equal(sheet.getCell('O11').value || '', '');
   assert.equal(sheet.getCell('A9').fill.fgColor.argb, 'FF92D050');
@@ -68,26 +68,36 @@ test('comparison export writes concise notes from quantity status', async t => {
   const file = path.join(dir, 'notes.xlsx');
   await exportWorkbook(file, ['comparison'], { comparison:[
     { projectCode:'MEC1', drawingCode:'ENOUGH', purchaseQuantity:2, scanQuantity:2, warehouseQuantity:0, poNumber:'PO-OK', dueDate:'24/08/2026', note:'old detail' },
-    { projectCode:'MEC1', drawingCode:'ARRIVED', purchaseQuantity:3, scanQuantity:1, warehouseQuantity:3 },
+    { projectCode:'MEC1', drawingCode:'ARRIVED', purchaseQuantity:3, scanQuantity:1, warehouseQuantity:3, poNumber:'PO-ARRIVED', dueDate:'24/08/2026' },
     { projectCode:'MEC1', drawingCode:'NOT-ARRIVED', purchaseQuantity:3, scanQuantity:0, warehouseQuantity:0, supplier:'NCC A', poNumber:'PO-01', dueDate:'25/08/2026', warehouseOrderPlaced:true },
     { projectCode:'MEC1', drawingCode:'NO-ORDER', purchaseQuantity:3, scanQuantity:0, warehouseQuantity:0, warehouseOrderPlaced:false },
     { projectCode:'MEC1', drawingCode:'PARTIAL', purchaseQuantity:3, scanQuantity:1, warehouseQuantity:2, supplier:'NCC B', poNumber:'PO-02', dueDate:'26/08/2026', warehouseOrderPlaced:true },
-    { projectCode:'MEC1', drawingCode:'EXCESS', purchaseQuantity:3, scanQuantity:4, warehouseQuantity:3, poNumber:'PO-X', dueDate:'30/08/2026' }
+    { projectCode:'MEC1', drawingCode:'EXCESS', purchaseQuantity:3, scanQuantity:4, warehouseQuantity:3, poNumber:'PO-X', dueDate:'30/08/2026' },
+    { projectCode:'MEC1', drawingCode:'NO-PURCHASE-SCAN', purchaseQuantity:0, scanQuantity:2, warehouseQuantity:0, poNumber:'PO-NP1', dueDate:'31/08/2026' },
+    { projectCode:'MEC1', drawingCode:'NO-PURCHASE-WH', purchaseQuantity:0, scanQuantity:0, warehouseQuantity:2, poNumber:'PO-NP2', dueDate:'31/08/2026' }
   ] });
   const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile(file);
   const sheet = workbook.getWorksheet('MEC1');
-  assert.deepEqual([10, 11, 12, 13, 14, 15].map(row => sheet.getCell(`L${row}`).value || ''), [
-    '', 'Thiếu 2', 'Thiếu 3', 'Thiếu 3', 'Thiếu 2', 'Thừa 1'
+  assert.deepEqual([10, 11, 12, 13, 14, 15, 16, 17].map(row => sheet.getCell(`L${row}`).value || ''), [
+    '', 'Thiếu 2', 'Thiếu 3', 'Thiếu 3', 'Thiếu 2', 'Thừa 1', 'Thừa 2', ''
   ]);
-  assert.deepEqual([10, 11, 12, 13, 14, 15].map(row => sheet.getCell(`M${row}`).value || ''), [
-    '', 'Kho', 'NCC A', 'PU check', 'NCC B', 'Kho'
+  assert.deepEqual([10, 11, 12, 13, 14, 15, 16, 17].map(row => sheet.getCell(`M${row}`).value || ''), [
+    '', 'Kho', 'NCC A', 'PU check', 'NCC B', '', 'PU check', 'PU check'
   ]);
-  assert.deepEqual([10, 11, 12, 13, 14, 15].map(row => sheet.getCell(`K${row}`).value), [
-    'OK', 'Chưa bắn code', 'Chưa về', 'Chưa về', 'Chưa về đủ', 'Đã về'
+  assert.deepEqual([10, 11, 12, 13, 14, 15, 16, 17].map(row => sheet.getCell(`K${row}`).value), [
+    'OK', 'Chưa bắn code', 'Chưa về', 'Chưa về', 'Chưa về đủ', 'OK', 'Check lại', 'Check lại'
   ]);
-  for (let row = 10; row <= 15; row++) assert.equal(sheet.getCell(`K${row}`).dataValidation.type, 'list');
+  for (let row = 10; row <= 17; row++) assert.equal(sheet.getCell(`K${row}`).dataValidation.type, 'list');
   assert.deepEqual([sheet.getCell('N12').value, sheet.getCell('O12').value], ['PO-01','25/08/2026']);
-  assert.deepEqual([sheet.getCell('N10').value || '', sheet.getCell('O10').value || '', sheet.getCell('N15').value || '', sheet.getCell('O15').value || ''], ['','','','']);
+  assert.deepEqual([
+    sheet.getCell('N10').value || '', sheet.getCell('O10').value || '',
+    sheet.getCell('N11').value || '', sheet.getCell('O11').value || '',
+    sheet.getCell('N15').value || '', sheet.getCell('O15').value || '',
+    sheet.getCell('N16').value || '', sheet.getCell('O16').value || ''
+  ], ['','','','','','','','']);
+  assert.equal(sheet.getCell('M11').fill.fgColor.argb, 'FFD9EAF7');
+  assert.equal(sheet.getCell('M13').fill.fgColor.argb, 'FFFFE5CC');
+  assert.notEqual(sheet.getCell('M11').fill.fgColor.argb, sheet.getCell('M13').fill.fgColor.argb);
 });
 
 test('comparison export strikes an old linked code and shows the new code', async t => {
