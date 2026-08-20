@@ -190,6 +190,13 @@ test('sidebar opens a dedicated page for project-scoped old-to-new code links', 
   assert.match(css, /td\[data-column="purchaseOrder"\] \.cell-value\.changed-code\.changed-pr[\s\S]*flex-direction: column/);
 });
 
+test('sidebar exposes database management and keeps the protected delete action reachable', () => {
+  assert.match(html, /data-view="settings"[\s\S]*Quản lý cơ sở dữ liệu/);
+  assert.match(html, /id="settings" class="view"[\s\S]*id="deleteDatabase"/);
+  assert.match(js, /deleteDatabase'\)\.onclick=\(\)=>startDelete\(\)/);
+  assert.match(js, /deleteStep=1/);
+});
+
 test('installed app exposes a silent GitHub update button and automated release command', () => {
   assert.match(html, /id="updateBtn"/);
   assert.match(preload, /update:check/);
