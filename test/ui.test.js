@@ -151,7 +151,7 @@ test('application branding hides the native menu and shows the logo with the cur
 
 test('application information dialog shows version-specific improvements and the GitHub project link', () => {
   assert.match(html, /id="infoDialog"[\s\S]*id="appVersion"[\s\S]*id="githubLink"/);
-  for (const version of ['1.0.7','1.0.6','1.0.5','1.0.4','1.0.3','1.0.2','1.0.1','1.0.0']) assert.match(html, new RegExp(`data-version="${version.replaceAll('.', '\\.')}"`));
+  for (const version of ['1.0.9','1.0.8','1.0.7','1.0.6','1.0.5','1.0.4','1.0.3','1.0.2','1.0.1','1.0.0']) assert.match(html, new RegExp(`data-version="${version.replaceAll('.', '\\.')}"`));
   assert.match(html, /Lịch sử cải tiến/);
   assert.match(html, /current-version-badge/);
   assert.match(js, /note\.dataset\.version===version/);
@@ -269,9 +269,12 @@ test('installed app exposes a silent GitHub update button and automated release 
   assert.match(releaseAuto, /electron-builder --win nsis --publish never/);
   assert.match(releaseAuto, /gh release create/);
   assert.match(releaseAuto, /gh release upload/);
-  assert.match(releaseAuto, /dist\\latest\.yml/);
+  assert.match(releaseAuto, /Join-Path \$buildOutput 'latest\.yml'/);
   assert.match(releaseAuto, /function Get-Sha512Base64/);
   assert.match(releaseAuto, /latest\.yml does not match the built installer/);
+  assert.match(releaseAuto, /Resume version v\$currentVersion after the interrupted release/);
+  assert.match(releaseAuto, /release-\$version-\$buildStamp/);
+  assert.match(releaseAuto, /--config\.directories\.output=\$buildOutput/);
   assert.doesNotMatch(releaseAuto, /electron-builder --win nsis --publish always/);
   assert.match(releaseAuto, /git add -- \$releasePaths/);
   assert.match(releaseAuto, /function Invoke-Probe/);

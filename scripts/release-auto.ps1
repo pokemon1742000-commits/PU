@@ -82,15 +82,44 @@ if (-not $env:GH_TOKEN) {
 }
 
 try {
-  Invoke-Checked 'Increase patch version' { npm version patch --no-git-tag-version }
-  $package = Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'package.json') | ConvertFrom-Json
+  $packagePath = Join-Path $projectRoot 'package.json'
+  $package = Get-Content -Raw -LiteralPath $packagePath | ConvertFrom-Json
+  $currentVersion = [version][string]$package.version
+  $headPackageProbe = Invoke-Probe { git show 'HEAD:package.json' }
+  $resumeVersion = $false
+  if ($headPackageProbe.ExitCode -eq 0 -and $headPackageProbe.Output) {
+    $headPackage = $headPackageProbe.Output | ConvertFrom-Json
+    $headVersion = [version][string]$headPackage.version
+    $candidateTag = "v$currentVersion"
+    $localTagProbe = Invoke-Probe { git rev-parse -q --verify "refs/tags/$candidateTag" }
+    $remoteTagProbe = Invoke-Probe { git ls-remote --exit-code --tags origin "refs/tags/$candidateTag" }
+    $resumeVersion = (
+      $currentVersion.Major -eq $headVersion.Major -and
+      $currentVersion.Minor -eq $headVersion.Minor -and
+      $currentVersion.Build -eq ($headVersion.Build + 1) -and
+      $localTagProbe.ExitCode -ne 0 -and
+      $remoteTagProbe.ExitCode -ne 0
+    )
+  }
+
+  if ($resumeVersion) {
+    Write-Host "`n==> Resume version v$currentVersion after the interrupted release" -ForegroundColor Yellow
+  } else {
+    Invoke-Checked 'Increase patch version' { npm version patch --no-git-tag-version }
+    $package = Get-Content -Raw -LiteralPath $packagePath | ConvertFrom-Json
+  }
   $version = [string]$package.version
   $tag = "v$version"
   if (-not $Message) { $Message = "Release $tag" }
 
+  $buildStamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+  $buildOutput = Join-Path $projectRoot "dist\release-$version-$buildStamp"
+
   Invoke-Checked 'Run tests' { npm test }
   Invoke-Checked 'Check syntax' { npm run check }
-  Invoke-Checked 'Build Windows updater installer' { npx electron-builder --win nsis --publish never }
+  Invoke-Checked 'Build Windows updater installer' {
+    npx electron-builder --win nsis --publish never "--config.directories.output=$buildOutput"
+  }
 
   $releasePaths = @(
     '.gitignore', 'AGENTS.md', 'README.md', 'main.js', 'package.json', 'package-lock.json',
@@ -116,9 +145,9 @@ try {
     Invoke-Checked "Create GitHub Release $tag" { gh release create $tag --repo $repository --verify-tag --title $tag --notes $Message }
   }
 
-  $installer = Join-Path $projectRoot "dist\Doi-Chieu-Setup-$version.exe"
+  $installer = Join-Path $buildOutput "Doi-Chieu-Setup-$version.exe"
   $blockMap = "$installer.blockmap"
-  $latestMetadata = Join-Path $projectRoot 'dist\latest.yml'
+  $latestMetadata = Join-Path $buildOutput 'latest.yml'
   foreach ($asset in @($installer, $blockMap, $latestMetadata)) {
     if (-not (Test-Path -LiteralPath $asset)) { throw "Release asset was not found: $asset" }
   }
@@ -133,6 +162,7 @@ try {
   Invoke-Checked "Upload installer assets for $tag" { gh release upload $tag $installer $blockMap $latestMetadata --repo $repository --clobber }
 
   Write-Host "`nDone: $tag was committed, built, pushed, and published to $remoteUrl." -ForegroundColor Green
+  Write-Host "Installer: $installer" -ForegroundColor Green
 } finally {
   if ($tokenLoadedFromGh) { Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue }
 }

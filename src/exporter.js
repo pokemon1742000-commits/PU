@@ -47,7 +47,7 @@ function formatProjectReportSheet(ws, rows) {
     const output = ws.addRow([
       index + 1, row.projectCode, row.drawingCode, row.itemName,
       row.purchaseQuantity, row.scanQuantity, row.maker, row.scanDate,
-      row.warehouseDate, row.warehouseQuantity, statusValue, exportNote(row), operatorValue,
+      row.warehouseDate, row.warehouseQuantity, statusValue, '', operatorValue,
       showOrderDetails ? (row.poNumber || '') : '', showOrderDetails ? (row.dueDate || '') : '', '', ''
     ]);
     output.font = { name:'Aptos Narrow', size:11 };
@@ -87,19 +87,6 @@ function safeWorksheetName(value) {
 function numeric(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function exportNote(row) {
-  const purchase = numeric(row.purchaseQuantity);
-  const scanned = numeric(row.scanQuantity);
-  const difference = quantityValue(scanned - purchase);
-  if (difference > 1e-8) return `Thừa ${difference}`;
-  if (difference < -1e-8) return `Thiếu ${Math.abs(difference)}`;
-  return '';
-}
-
-function quantityValue(value) {
-  return Number(Number(value || 0).toFixed(6));
 }
 
 function exportStatus(row) {

@@ -25,10 +25,10 @@ test('comparison export follows the single-sheet template, excludes confirmation
   const sheet = workbook.getWorksheet('MEC001');
   assert.equal(sheet.getCell('A3').value, 'SỐ LIỆU XUẤT KHO');
   assert.deepEqual(sheet.getRow(9).values.slice(1), ['STT','Mã dự án','Mã hàng','Tên hàng','Số lượng BOOM','Số liệu XK','Maker','Ngày bắn code','Ngày nhập kho','Số lượng nhập kho','Tình trạng','Note','Người Vận Hành','Mã PO','Hạn Giao Hàng','Note đổi mã','Đổi PR']);
-  assert.deepEqual(sheet.getRow(10).values.slice(1), [1,'MEC001','DWG-1','Item',3,1,'Maker A','15/Aug','14/08/2026',2,'Chưa về đủ','Thiếu 2','NCC A','PO-1','20/08/2026','','']);
+  assert.deepEqual(sheet.getRow(10).values.slice(1), [1,'MEC001','DWG-1','Item',3,1,'Maker A','15/Aug','14/08/2026',2,'Chưa về đủ','','NCC A','PO-1','20/08/2026','','']);
   assert.equal(sheet.getCell('K10').dataValidation.type, 'list');
   assert.equal(sheet.getCell('K10').dataValidation.formulae[0], '"OK,Chưa về,Chưa về đủ,Đã về,Chưa bắn code,Check lại,Hủy,Tồn,Common"');
-  assert.equal(sheet.getCell('L11').value, 'Thừa 2');
+  assert.equal(sheet.getCell('L11').value || '', '');
   assert.equal(sheet.getCell('M11').value || '', '');
   assert.equal(sheet.getCell('N11').value || '', '');
   assert.equal(sheet.getCell('O11').value || '', '');
@@ -62,7 +62,7 @@ test('comparison export combines multiple scan projects into one sheet', async t
   assert.equal(workbook.getWorksheet('NHIỀU DỰ ÁN').getCell('A11').value, 2);
 });
 
-test('comparison export writes concise notes from quantity status', async t => {
+test('comparison export leaves the Note column blank', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'comparison-notes-'));
   t.after(() => fs.rm(dir, { recursive:true, force:true }));
   const file = path.join(dir, 'notes.xlsx');
@@ -79,7 +79,7 @@ test('comparison export writes concise notes from quantity status', async t => {
   const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile(file);
   const sheet = workbook.getWorksheet('MEC1');
   assert.deepEqual([10, 11, 12, 13, 14, 15, 16, 17].map(row => sheet.getCell(`L${row}`).value || ''), [
-    '', 'Thiếu 2', 'Thiếu 3', 'Thiếu 3', 'Thiếu 2', 'Thừa 1', 'Thừa 2', ''
+    '', '', '', '', '', '', '', ''
   ]);
   assert.deepEqual([10, 11, 12, 13, 14, 15, 16, 17].map(row => sheet.getCell(`M${row}`).value || ''), [
     '', 'Kho', 'NCC A', 'PU check', 'NCC B', '', 'PU check', 'PU check'
