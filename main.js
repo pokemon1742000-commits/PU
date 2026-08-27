@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs/promises');
 const { Worker } = require('worker_threads');
 const { autoUpdater } = require('electron-updater');
-const { buildComparison, resolveReview, filterPurchasesByProjectPrefix, prioritizeProjectWarnings, mergePurchaseRows, mergeWarehouseRows } = require('./src/processor');
+const { buildComparison, resolveReview, filterPurchasesByProjectPrefix, prioritizeProjectWarnings, mergePurchaseRows, mergeWarehouseRows, mergeWorkshopRows } = require('./src/processor');
 const { exportWorkbook } = require('./src/exporter');
 const { Database } = require('./src/storage');
 
@@ -20,7 +20,7 @@ let builtInJobCodeReference;
 app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096');
 
 function emptySession() {
-  return { purchase: [], purchaseAll: [], purchaseDetails: [], purchaseReplacements: [], scans: [], scanDetails: [], warehouse: [], warehouseDetails: [], comparison: [], review: [], warnings: [], formatWarnings: [], jobCodes: [], jobCodeDetails: [], jobCodeNotes: new Map(), decisions: new Map(), sources: [] };
+  return { purchase: [], purchaseAll: [], purchaseDetails: [], purchaseReplacements: [], scans: [], scanDetails: [], warehouse: [], warehouseDetails: [], workshop: [], workshopDetails: [], comparisonWarehouse: [], comparison: [], review: [], warnings: [], formatWarnings: [], jobCodes: [], jobCodeDetails: [], jobCodeNotes: new Map(), decisions: new Map(), sources: [] };
 }
 
 function createWindow() {
@@ -39,11 +39,12 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   database = new Database(path.join(app.getPath('userData'), 'data'));
   await database.init();
-  const [purchaseAll, purchaseDetails, purchaseReplacements, scans, scanDetails, warehouse, warehouseDetails, workingSession, jobCodeReference] = await Promise.all([
+  const [purchaseAll, purchaseDetails, purchaseReplacements, scans, scanDetails, warehouse, warehouseDetails, workshop, workshopDetails, workingSession, jobCodeReference] = await Promise.all([
     database.readPurchases(), database.readRawPurchases(), database.readPurchaseReplacements(),
-    database.readScans(), database.readRawScans(), database.readWarehouse(), database.readRawWarehouse(), database.readWorkingSession(), readBuiltInJobCodeReference()
+    database.readScans(), database.readRawScans(), database.readWarehouse(), database.readRawWarehouse(),
+    database.readWorkshop(), database.readRawWorkshop(), database.readWorkingSession(), readBuiltInJobCodeReference()
   ]);
-  session = sessionWithBuiltInJobCodes({ ...session, purchaseAll, purchaseDetails, purchaseReplacements, scans, scanDetails, warehouse, warehouseDetails, formatWarnings:workingSession.formatWarnings || [], sources:workingSession.sources || [], decisions:new Map(workingSession.decisions || []) }, jobCodeReference);
+  session = sessionWithBuiltInJobCodes({ ...session, purchaseAll, purchaseDetails, purchaseReplacements, scans, scanDetails, warehouse, warehouseDetails, workshop, workshopDetails, formatWarnings:workingSession.formatWarnings || [], sources:workingSession.sources || [], decisions:new Map(workingSession.decisions || []) }, jobCodeReference);
   refreshValidatedSession();
   autoCompareWhenReady();
   configureAutoUpdater();
@@ -69,7 +70,7 @@ function registerIpc() {
     return updateState;
   });
   ipcMain.handle('files:pick', async (_e, kind) => {
-    if (!['purchase', 'scan', 'warehouse'].includes(kind)) throw new Error('Loại file không được phép nạp thủ công.');
+    if (!['purchase', 'scan', 'warehouse', 'workshop'].includes(kind)) throw new Error('Loại file không được phép nạp thủ công.');
     const result = await dialog.showOpenDialog(win, {
       title: 'Chọn file dữ liệu',
       properties: ['openFile', 'multiSelections'],
@@ -116,11 +117,11 @@ function registerIpc() {
   ipcMain.handle('data:rows', (_e, name, options) => rowsFor(name, options));
   ipcMain.handle('session:clear', async () => {
     await database.clearWorkingSession();
-    const [purchaseAll, purchaseDetails, purchaseReplacements, warehouse, warehouseDetails, workingSession, jobCodeReference] = await Promise.all([
+    const [purchaseAll, purchaseDetails, purchaseReplacements, warehouse, warehouseDetails, workshop, workshopDetails, workingSession, jobCodeReference] = await Promise.all([
       database.readPurchases(), database.readRawPurchases(), database.readPurchaseReplacements(),
-      database.readWarehouse(), database.readRawWarehouse(), database.readWorkingSession(), readBuiltInJobCodeReference()
+      database.readWarehouse(), database.readRawWarehouse(), database.readWorkshop(), database.readRawWorkshop(), database.readWorkingSession(), readBuiltInJobCodeReference()
     ]);
-    session = sessionWithBuiltInJobCodes({ ...emptySession(), purchaseAll, purchaseDetails, purchaseReplacements, warehouse, warehouseDetails, formatWarnings:workingSession.formatWarnings || [], sources:workingSession.sources || [] }, jobCodeReference);
+    session = sessionWithBuiltInJobCodes({ ...emptySession(), purchaseAll, purchaseDetails, purchaseReplacements, warehouse, warehouseDetails, workshop, workshopDetails, formatWarnings:workingSession.formatWarnings || [], sources:workingSession.sources || [] }, jobCodeReference);
     refreshValidatedSession();
     return summary();
   });
@@ -164,6 +165,11 @@ async function load(kind, selections) {
       session.warehouse = merged.rows;
       session.warehouseDetails = await database.mergeRawWarehouse(result.details || result.rows);
       result.stats = merged.stats;
+    } else if (kind === 'workshop') {
+      const merged = await database.mergeWorkshop(result.rows);
+      session.workshop = merged.rows;
+      session.workshopDetails = await database.mergeRawWorkshop(result.details || result.rows);
+      result.stats = merged.stats;
     }
     session.formatWarnings.push(...(result.warnings || []));
     refreshValidatedSession();
@@ -176,10 +182,10 @@ async function load(kind, selections) {
 
 function rowsFor(name, options = {}) {
   const map = {
-    purchase: session.purchase, scan: session.scans, warehouse: session.warehouse,
+    purchase: session.purchase, scan: session.scans, warehouse: session.warehouse, workshop: session.workshop,
     comparison: session.comparison, enough: session.enough, shortage: session.shortage,
     excess: session.excess, review: session.review, warnings: session.warnings,
-    sources: session.sources, purchaseDetails: session.purchaseDetails, scanDetails: session.scanDetails, warehouseDetails: session.warehouseDetails,
+    sources: session.sources, purchaseDetails: session.purchaseDetails, scanDetails: session.scanDetails, warehouseDetails: session.warehouseDetails, workshopDetails: session.workshopDetails,
     jobCodeDetails: session.jobCodeDetails
   };
   let sourceRows = name === 'jobCodes'
@@ -196,7 +202,7 @@ function rowsFor(name, options = {}) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const page = Math.min(Math.max(Number(options.page) || 1, 1), totalPages);
   const start = (page - 1) * pageSize;
-  const numberedTables = ['purchase', 'scan', 'warehouse', 'jobCodes', 'comparison', 'enough', 'shortage', 'excess', 'review', 'warnings', 'purchaseDetails', 'scanDetails', 'warehouseDetails', 'jobCodeDetails'];
+  const numberedTables = ['purchase', 'scan', 'warehouse', 'workshop', 'jobCodes', 'comparison', 'enough', 'shortage', 'excess', 'review', 'warnings', 'purchaseDetails', 'scanDetails', 'warehouseDetails', 'workshopDetails', 'jobCodeDetails'];
   const rows = filtered.slice(start, start + pageSize).map((row, index) =>
     numberedTables.includes(name) ? { ...row, stt: start + index + 1 } : row
   );
@@ -278,6 +284,7 @@ function combineFileResults(kind, results) {
   if (results.length === 1) return results[0];
   const warnings = results.flatMap(result => result.warnings || []);
   if (kind === 'warehouse') return { rows: mergeWarehouseRows(results.flatMap(result => result.rows || [])), details: results.flatMap(result => result.details || []), warnings };
+  if (kind === 'workshop') return { rows: mergeWorkshopRows(results.flatMap(result => result.rows || [])), details: results.flatMap(result => result.details || []), warnings };
   if (kind !== 'scan') return { rows: results.flatMap(result => result.rows || []), details: results.flatMap(result => result.details || []), warnings };
   const groups = new Map();
   for (const row of results.flatMap(result => result.rows || [])) {
@@ -299,12 +306,12 @@ function combineFileResults(kind, results) {
 }
 
 function summary() {
-  const counts = Object.fromEntries(['purchase','scans','warehouse','jobCodes','comparison','enough','shortage','excess','review','warnings'].map(k => [k, (session[k] || []).length]));
+  const counts = Object.fromEntries(['purchase','scans','warehouse','workshop','jobCodes','comparison','enough','shortage','excess','review','warnings'].map(k => [k, (session[k] || []).length]));
   counts.review = (session.review || []).filter(row => row.status === 'Chờ xác nhận').length;
   return {
     counts,
     sources: session.sources,
-    rawCounts: { purchase: session.purchaseDetails.length, scan: session.scanDetails.length, warehouse: session.warehouseDetails.length, jobCodes: session.jobCodeDetails.length, warnings: session.purchaseDetails.length },
+    rawCounts: { purchase: session.purchaseDetails.length, scan: session.scanDetails.length, warehouse: session.warehouseDetails.length, workshop: session.workshopDetails.length, jobCodes: session.jobCodeDetails.length, warnings: session.purchaseDetails.length },
     autoThreshold: comparisonThreshold,
     confirmationThreshold,
     purchaseReplacements: session.purchaseReplacements,
@@ -324,12 +331,13 @@ function refreshValidatedSession() {
 function runComparison(threshold = 91, confirmThreshold = confirmationThreshold) {
   comparisonThreshold = Number(threshold) || 91;
   confirmationThreshold = Math.max(0, Math.min(Number.isFinite(Number(confirmThreshold)) ? Number(confirmThreshold) : 90, comparisonThreshold - 1));
-  const out = buildComparison(session.purchase, session.scans, session.warehouse, comparisonThreshold, session.decisions || new Map(), confirmationThreshold, session.purchaseReplacements);
+  session.comparisonWarehouse = mergeWarehouseRows([...(session.warehouse || []), ...(session.workshop || [])]);
+  const out = buildComparison(session.purchase, session.scans, session.comparisonWarehouse, comparisonThreshold, session.decisions || new Map(), confirmationThreshold, session.purchaseReplacements);
   Object.assign(session, out);
 }
 
 function autoCompareWhenReady() {
-  if (session.scans.length && (session.purchase.length || session.warehouse.length)) runComparison(comparisonThreshold, confirmationThreshold);
+  if (session.scans.length && (session.purchase.length || session.warehouse.length || session.workshop.length)) runComparison(comparisonThreshold, confirmationThreshold);
 }
 
 function saveWorkingSession() {

@@ -1,6 +1,6 @@
 {
   "name": "doi-chieu-du-lieu",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "description": "Ứng dụng đối chiếu dữ liệu mua hàng, quét mã và nhập kho",
   "repository": {
     "type": "git",
@@ -10,8 +10,13 @@
   "type": "commonjs",
   "scripts": {
     "start": "electron .",
-    "test": "node --test",
-    "check": "node --check main.js && node --check preload.js && node --check src/processor.js && node --check src/file-worker.js && node --check src/exporter.js && node --check renderer/app.js && node --check scripts/guide-preload.js && node --check scripts/generate-guide-images.js",
+    "start:desktop": "electron .",
+    "start:web": "node web-server.js",
+    "build:web": "node scripts/build-standalone.js",
+    "test": "node --test test/exporter.test.js test/processor.test.js test/storage.test.js test/ui.test.js",
+    "test:web": "node --test test/web.test.js test/standalone.test.js",
+    "check": "node --check main.js && node --check preload.js && node --check src/processor.js && node --check src/file-worker.js && node --check src/exporter.js && node --check src/storage.js && node --check renderer/app.js && node --check scripts/guide-preload.js && node --check scripts/generate-guide-images.js",
+    "check:web": "node --check web-server.js && node --check src/app-service.js && node --check standalone/app.js && node --check scripts/build-standalone.js && node --check renderer/web-api.js",
     "dist": "electron-builder --win portable",
     "publish": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish.ps1",
     "release:auto": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-auto.ps1"
@@ -19,11 +24,14 @@
   "dependencies": {
     "electron-updater": "^6.8.9",
     "exceljs": "^4.4.0",
-    "fuzzball": "^2.2.3"
+    "express": "^5.2.1",
+    "fuzzball": "^2.2.3",
+    "multer": "^2.2.0"
   },
   "devDependencies": {
     "electron": "^37.2.6",
-    "electron-builder": "^26.0.12"
+    "electron-builder": "^26.0.12",
+    "esbuild": "^0.25.12"
   },
   "build": {
     "appId": "vn.doichieu.desktop",

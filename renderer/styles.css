@@ -1456,25 +1456,25 @@ tr.confirmation-ignored .confirmation-status {
   max-width: 310px;
 }
 
-#data table[data-table="warehouse"] :is(th, td)[data-column="projectCode"] {
+#data table:is([data-table="warehouse"], [data-table="workshop"]) :is(th, td)[data-column="projectCode"] {
   width: 140px;
   min-width: 130px;
   max-width: 155px;
 }
 
-#data table[data-table="warehouse"] :is(th, td)[data-column="itemCode"] {
+#data table:is([data-table="warehouse"], [data-table="workshop"]) :is(th, td)[data-column="itemCode"] {
   width: 175px;
   min-width: 155px;
   max-width: 190px;
 }
 
-#data table[data-table="warehouse"] :is(th, td)[data-column="supplier"] {
+#data table:is([data-table="warehouse"], [data-table="workshop"]) :is(th, td)[data-column="supplier"] {
   width: 145px;
   min-width: 125px;
   max-width: 165px;
 }
 
-#data table[data-table="warehouse"] :is(td[data-column="projectCode"], td[data-column="itemCode"], td[data-column="supplier"]) .cell-value {
+#data table:is([data-table="warehouse"], [data-table="workshop"]) :is(td[data-column="projectCode"], td[data-column="itemCode"], td[data-column="supplier"]) .cell-value {
   display: block;
   max-width: 100%;
   overflow: hidden;
@@ -1484,23 +1484,23 @@ tr.confirmation-ignored .confirmation-status {
   text-overflow: ellipsis;
 }
 
-#data table[data-table="warehouse"] :is(th, td)[data-column="itemName"] {
+#data table:is([data-table="warehouse"], [data-table="workshop"]) :is(th, td)[data-column="itemName"] {
   width: 195px;
   min-width: 165px;
   max-width: 205px;
 }
 
-#data table[data-table="warehouse"] td[data-column="itemName"] .cell-value {
+#data table:is([data-table="warehouse"], [data-table="workshop"]) td[data-column="itemName"] .cell-value {
   max-width: 195px;
 }
 
-#data table[data-table="warehouse"] :is(th, td)[data-column="note"] {
+#data table:is([data-table="warehouse"], [data-table="workshop"]) :is(th, td)[data-column="note"] {
   width: 190px;
   min-width: 170px;
   max-width: none;
 }
 
-#data table[data-table="warehouse"] td[data-column="note"] .cell-value {
+#data table:is([data-table="warehouse"], [data-table="workshop"]) td[data-column="note"] .cell-value {
   max-width: none;
   overflow: visible;
   white-space: nowrap;

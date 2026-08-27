@@ -7,10 +7,12 @@ class Database {
     this.purchaseFile = path.join(dir, 'purchases.json');
     this.scanFile = path.join(dir, 'scans.json');
     this.warehouseFile = path.join(dir, 'warehouse.json');
+    this.workshopFile = path.join(dir, 'workshop.json');
     this.jobFile = path.join(dir, 'job-codes.json');
     this.purchaseRawFile = path.join(dir, 'purchase-raw.json');
     this.scanRawFile = path.join(dir, 'scan-raw.json');
     this.warehouseRawFile = path.join(dir, 'warehouse-raw.json');
+    this.workshopRawFile = path.join(dir, 'workshop-raw.json');
     this.purchaseReplacementFile = path.join(dir, 'purchase-code-replacements.json');
     this.jobRawFile = path.join(dir, 'job-codes-raw.json');
     this.workingSessionFile = path.join(dir, 'working-session.json');
@@ -24,10 +26,12 @@ class Database {
   readPurchases() { return this.read(this.purchaseFile); }
   readScans() { return this.read(this.scanFile); }
   readWarehouse() { return this.read(this.warehouseFile); }
+  readWorkshop() { return this.read(this.workshopFile); }
   readJobCodes() { return this.read(this.jobFile); }
   readRawPurchases() { return this.read(this.purchaseRawFile); }
   readRawScans() { return this.read(this.scanRawFile); }
   readRawWarehouse() { return this.read(this.warehouseRawFile); }
+  readRawWorkshop() { return this.read(this.workshopRawFile); }
   readRawJobCodes() { return this.read(this.jobRawFile); }
   readPurchaseReplacements() { return this.read(this.purchaseReplacementFile); }
   readWorkingSession() { return this.read(this.workingSessionFile, {}); }
@@ -81,6 +85,7 @@ class Database {
   mergeRawPurchases(rows) { return this.mergeRaw(this.purchaseRawFile, rows); }
   mergeRawScans(rows) { return this.mergeRaw(this.scanRawFile, rows); }
   mergeRawWarehouse(rows) { return this.mergeRaw(this.warehouseRawFile, rows); }
+  mergeRawWorkshop(rows) { return this.mergeRaw(this.workshopRawFile, rows); }
   mergeRawJobCodes(rows) { return this.mergeRaw(this.jobRawFile, rows); }
   writeJobCodes(codes) { return this.atomicWrite(this.jobFile, codes); }
   async archiveSourceFiles(kind, filePaths) {
@@ -207,9 +212,14 @@ class Database {
       ['projectCode','itemCode','supplier','poNumber','dueDate','deliveryDate'],
       ['projectName','itemName','orderedQuantity','receivedQuantity','mergedRowCount','note']);
   }
+  mergeWorkshop(rows) {
+    return this.mergeDataset(this.workshopFile, rows,
+      ['projectCode','itemCode','purchaseRequest','poNumber','dueDate','deliveryDate'],
+      ['projectName','itemName','prDate','orderedQuantity','receivedQuantity','mergedRowCount','note']);
+  }
   async backup() {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    for (const [file, name] of [[this.purchaseFile, 'purchases'], [this.warehouseFile, 'warehouse']]) {
+    for (const [file, name] of [[this.purchaseFile, 'purchases'], [this.warehouseFile, 'warehouse'], [this.workshopFile, 'workshop']]) {
       try { await fs.writeFile(path.join(this.backupDir, `${name}-${stamp}.json`), await fs.readFile(file)); }
       catch (e) { if (e.code !== 'ENOENT') throw e; }
     }
@@ -217,8 +227,8 @@ class Database {
   async clearWorkingSession() {
     const state = await this.readWorkingSession();
     const persistentState = {
-      sources:(state.sources || []).filter(source => source.kind === 'warehouse'),
-      formatWarnings:(state.formatWarnings || []).filter(warning => warning.source === 'Nhập Kho')
+      sources:(state.sources || []).filter(source => ['warehouse','workshop'].includes(source.kind)),
+      formatWarnings:(state.formatWarnings || []).filter(warning => ['Nhập Kho','Xưởng Gia Công'].includes(warning.source))
     };
     await Promise.all([
       this.atomicWrite(this.scanFile, []), this.atomicWrite(this.scanRawFile, []),
@@ -232,6 +242,7 @@ class Database {
       this.atomicWrite(this.purchaseReplacementFile, []),
       this.atomicWrite(this.scanFile, []), this.atomicWrite(this.scanRawFile, []),
       this.atomicWrite(this.warehouseFile, []), this.atomicWrite(this.warehouseRawFile, []),
+      this.atomicWrite(this.workshopFile, []), this.atomicWrite(this.workshopRawFile, []),
       this.atomicWrite(this.workingSessionFile, {})
     ]);
   }

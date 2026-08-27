@@ -104,7 +104,7 @@ test('raw purchase and Job Code rows accumulate without duplicating a reimported
   assert.deepEqual(jobs.map(row => row.code), ['MEC1','MEC2']);
 });
 
-test('scan clears with the working session while warehouse remains a long-term database', async t => {
+test('scan clears with the working session while warehouse and workshop remain long-term databases', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'working-session-'));
   t.after(() => fs.rm(dir, { recursive:true, force:true }));
   const db = new Database(dir); await db.init();
@@ -127,26 +127,35 @@ test('scan clears with the working session while warehouse remains a long-term d
   assert.equal((await db.readWarehouse())[0].poNumber, 'PO-001');
   assert.equal((await db.readWarehouse())[0].receivedQuantity, 3);
 
+  const workshopA = { projectCode:'MEC1', itemCode:'A-01_GC', purchaseRequest:'PR-XGC', poNumber:'PO-XGC', prDate:'01/08/2026', dueDate:'10/08/2026', deliveryDate:'09/08/2026', orderedQuantity:2, receivedQuantity:1 };
+  const workshop = await db.mergeWorkshop([workshopA]);
+  assert.deepEqual(workshop.stats, { loaded:1, added:1, updated:0, unchanged:0, total:1 });
+  await db.mergeRawWorkshop([{ sourceFile:'xgc.xlsx', sourceSheet:'Data', sourceRow:7, receivedQuantity:1 }]);
+
   await db.mergeRawScans([{ sourceFile:'scan.xlsx', sourceSheet:'Data', sourceRow:1, quantity:3 }]);
   await db.mergeRawWarehouse([{ sourceFile:'warehouse.xlsx', sourceSheet:'Data', sourceRow:2, receivedQuantity:3 }]);
   await db.writeWorkingSession({
-    sources:[{ kind:'scan', file:'scan.xlsx' }, { kind:'warehouse', file:'warehouse.xlsx' }],
-    formatWarnings:[{ source:'Quét Mã', note:'scan' }, { source:'Nhập Kho', note:'warehouse' }],
+    sources:[{ kind:'scan', file:'scan.xlsx' }, { kind:'warehouse', file:'warehouse.xlsx' }, { kind:'workshop', file:'xgc.xlsx' }],
+    formatWarnings:[{ source:'Quét Mã', note:'scan' }, { source:'Nhập Kho', note:'warehouse' }, { source:'Xưởng Gia Công', note:'workshop' }],
     decisions:[['MEC1|A-01', { action:'ignored' }]]
   });
-  assert.equal((await db.readWorkingSession()).sources.length, 2);
+  assert.equal((await db.readWorkingSession()).sources.length, 3);
 
   await db.clearWorkingSession();
   assert.deepEqual(await db.readScans(), []);
   assert.equal((await db.readWarehouse())[0].receivedQuantity, 3);
   assert.deepEqual(await db.readRawScans(), []);
   assert.equal((await db.readRawWarehouse())[0].receivedQuantity, 3);
+  assert.equal((await db.readWorkshop())[0].receivedQuantity, 1);
+  assert.equal((await db.readRawWorkshop())[0].receivedQuantity, 1);
   assert.deepEqual(await db.readWorkingSession(), {
-    sources:[{ kind:'warehouse', file:'warehouse.xlsx' }],
-    formatWarnings:[{ source:'Nhập Kho', note:'warehouse' }]
+    sources:[{ kind:'warehouse', file:'warehouse.xlsx' }, { kind:'workshop', file:'xgc.xlsx' }],
+    formatWarnings:[{ source:'Nhập Kho', note:'warehouse' }, { source:'Xưởng Gia Công', note:'workshop' }]
   });
 
   await db.backupAndClear();
   assert.deepEqual(await db.readWarehouse(), []);
   assert.deepEqual(await db.readRawWarehouse(), []);
+  assert.deepEqual(await db.readWorkshop(), []);
+  assert.deepEqual(await db.readRawWorkshop(), []);
 });

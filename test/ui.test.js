@@ -60,15 +60,29 @@ test('file import supports multiple files and explicit multi-sheet selection', (
   assert.match(js, /setTimeout\(applyThreshold,350\)/);
 });
 
-test('scan and warehouse imports persist and merge incrementally across app restarts', () => {
+test('workshop import exposes the XGC button, table, mapping, and raw-data view', () => {
+  assert.match(html, /data-kind="workshop"[\s\S]*Dữ Liệu Xưởng Gia Công/);
+  assert.match(html, /data-open-table="workshop"/);
+  assert.match(html, /id="dashWorkshop"/);
+  for (const label of ['Số PR \\(MKS\\)','Số PO','Ngày PR','Mã hàng','Tên hàng','Số lượng đặt','Hạn ngày về','Số lượng nhập kho','Ngày nhập kho']) {
+    assert.match(js, new RegExp(label));
+  }
+  assert.match(js, /workshop:'workshopDetails'/);
+  assert.match(processor, /if \(kind === 'workshop'\) return processWorkshop\(files\)/);
+  assert.match(processor, /\/_GC\$\/i\.test\(itemCode\)/);
+});
+
+test('scan, warehouse, and workshop imports persist and merge incrementally across app restarts', () => {
   assert.match(main, /database\.readScans\(\)/);
   assert.match(main, /database\.readWarehouse\(\)/);
   assert.match(main, /database\.mergeScans\(result\.rows\)/);
   assert.match(main, /database\.mergeWarehouse\(result\.rows\)/);
+  assert.match(main, /database\.readWorkshop\(\)/);
+  assert.match(main, /database\.mergeWorkshop\(result\.rows\)/);
   assert.match(main, /database\.clearWorkingSession\(\)/);
   assert.match(main, /decisions:new Map\(workingSession\.decisions \|\| \[\]\)/);
   assert.match(js, /thêm \$\{stats\.added\}, cập nhật \$\{stats\.updated\}/);
-  assert.match(js, /Dữ liệu Mua Hàng và Nhập Kho sẽ được giữ lại/);
+  assert.match(js, /Dữ liệu Mua Hàng, Nhập Kho và Xưởng Gia Công sẽ được giữ lại/);
   assert.match(main, /database\.clearWorkingSession\(\)[\s\S]*database\.readWarehouse\(\)/);
 });
 
@@ -151,7 +165,7 @@ test('application branding hides the native menu and shows the logo with the cur
 
 test('application information dialog shows version-specific improvements and the GitHub project link', () => {
   assert.match(html, /id="infoDialog"[\s\S]*id="appVersion"[\s\S]*id="githubLink"/);
-  for (const version of ['1.0.9','1.0.8','1.0.7','1.0.6','1.0.5','1.0.4','1.0.3','1.0.2','1.0.1','1.0.0']) assert.match(html, new RegExp(`data-version="${version.replaceAll('.', '\\.')}"`));
+  for (const version of ['1.0.10','1.0.9','1.0.8','1.0.7','1.0.6','1.0.5','1.0.4','1.0.3','1.0.2','1.0.1','1.0.0']) assert.match(html, new RegExp(`data-version="${version.replaceAll('.', '\\.')}"`));
   assert.match(html, /Lịch sử cải tiến/);
   assert.match(html, /current-version-badge/);
   assert.match(js, /note\.dataset\.version===version/);
@@ -167,7 +181,7 @@ test('information dialog includes an illustrated guide for every main action', (
   assert.match(html, /data-info-panel="releaseInfo"/);
   assert.match(html, /data-info-panel="guideInfo"/);
   assert.match(html, /id="guideInfo"[\s\S]*guide-actual-controls\.png[\s\S]*guide-actual-confirm\.png[\s\S]*guide-actual-results\.png/);
-  for (const label of ['Mua Hàng','Nhập Kho','Quét Mã','Đổi mã đã duyệt PR','Clear dữ liệu phiên','Xóa database','Update','Xuất Excel']) assert.match(html, new RegExp(label));
+  for (const label of ['Mua Hàng','Nhập Kho','Xưởng Gia Công','Quét Mã','Đổi mã đã duyệt PR','Clear dữ liệu phiên','Xóa database','Update','Xuất Excel']) assert.match(html, new RegExp(label));
   assert.match(js, /function showInfoPanel\(panelId\)/);
   assert.match(css, /\.guide-step/);
   assert.match(css, /\.guide-actions/);
@@ -283,16 +297,17 @@ test('installed app exposes a silent GitHub update button and automated release 
   assert.doesNotMatch(releaseAuto, /git add --all|git add -A/);
 });
 
-test('warehouse key fields prefer one line with compact item names and wide notes', () => {
+test('warehouse and workshop key fields prefer one line with compact item names and wide notes', () => {
   assert.match(js, /warehouse:.*\['poNumber','PO'\]/);
-  assert.match(css, /data-table="warehouse"[\s\S]*data-column="supplier"/);
-  assert.match(css, /data-table="warehouse"[\s\S]*data-column="itemName"[\s\S]*width: 195px/);
-  assert.match(css, /data-table="warehouse"[\s\S]*data-column="note"[\s\S]*width: 190px/);
-  assert.match(css, /data-table="warehouse"[\s\S]*text-overflow: clip/);
+  assert.match(js, /workshop:.*\['poNumber','Số PO'\]/);
+  assert.match(css, /data-table="warehouse"\], \[data-table="workshop"[\s\S]*data-column="supplier"/);
+  assert.match(css, /data-table="warehouse"\], \[data-table="workshop"[\s\S]*data-column="itemName"[\s\S]*width: 195px/);
+  assert.match(css, /data-table="warehouse"\], \[data-table="workshop"[\s\S]*data-column="note"[\s\S]*width: 190px/);
+  assert.match(css, /data-table="warehouse"\], \[data-table="workshop"[\s\S]*text-overflow: clip/);
 });
 
-test('warehouse shortage rows use the red missing status style', () => {
-  assert.match(js, /activeTable==='warehouse'&&!rawMode&&row\.isShortage/);
+test('warehouse and workshop shortage rows use the red missing status style', () => {
+  assert.match(js, /\['warehouse','workshop'\]\.includes\(activeTable\)&&!rawMode&&row\.isShortage/);
   assert.match(js, /return 'warehouse-shortage'/);
   assert.match(css, /warehouse-shortage[^}]*orderedQuantity/);
   assert.match(css, /warehouse-shortage[^}]*receivedQuantity/);

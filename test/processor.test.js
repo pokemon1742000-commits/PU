@@ -36,6 +36,58 @@ test('extracts MEC/AUT project codes from purchase order text', () => {
   assert.equal(projectCode('PR-0001'), '');
 });
 
+test('reads XGC workshop mapping and matches the _GC item code during comparison', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'workshop-xgc-'));
+  t.after(() => fs.rm(dir, { recursive:true, force:true }));
+  const file = path.join(dir, 'Xgc2508.xlsx');
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Sheet1');
+  for (let row = 1; row <= 5; row++) sheet.addRow([]);
+  sheet.addRow(['Trễ hạn (ngày)','Số lượng chưa sản xuất','STT','MKS','Mã hàng','Tên hàng','ĐVT','Số','Ngày','Số lượng','Ngày','Số lượng']);
+  sheet.addRow([0,'IO-MEC2408011-04-260105',new Date(Date.UTC(2026,0,5)),'AGV-MEC2408011-11-251230','PM111014-D_GC','Stop Ring','PCS',2,new Date(Date.UTC(2026,1,7)),1,new Date(Date.UTC(2026,1,4)),1]);
+  sheet.addRow([0,'IO-MEC2408011-04-260105',new Date(Date.UTC(2026,0,5)),'AGV-MEC2408011-11-251230','NOT-WORKSHOP','Bỏ qua','PCS',99,new Date(Date.UTC(2026,1,7)),99,new Date(Date.UTC(2026,1,4)),0]);
+  await workbook.xlsx.writeFile(file);
+
+  const result = await processWithWorker('workshop', file);
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.details.length, 1);
+  assert.deepEqual({
+    projectCode:result.rows[0].projectCode,
+    purchaseRequest:result.rows[0].purchaseRequest,
+    poNumber:result.rows[0].poNumber,
+    prDate:result.rows[0].prDate,
+    itemCode:result.rows[0].itemCode,
+    itemName:result.rows[0].itemName,
+    orderedQuantity:result.rows[0].orderedQuantity,
+    dueDate:result.rows[0].dueDate,
+    receivedQuantity:result.rows[0].receivedQuantity,
+    deliveryDate:result.rows[0].deliveryDate
+  }, {
+    projectCode:'MEC2408011',
+    purchaseRequest:'AGV-MEC2408011-11-251230',
+    poNumber:'IO-MEC2408011-04-260105',
+    prDate:'05/01/2026',
+    itemCode:'PM111014-D_GC',
+    itemName:'Stop Ring',
+    orderedQuantity:2,
+    dueDate:'07/02/2026',
+    receivedQuantity:1,
+    deliveryDate:'04/02/2026'
+  });
+
+  const compared = buildComparison(
+    [{ projectCode:'MEC2408011', itemCode:'PM111014-D', quantity:2 }],
+    [{ projectCode:'MEC2408011', drawingCode:'PM111014-D_GC', quantity:1 }],
+    result.rows,
+    91,
+    new Map(),
+    90
+  );
+  assert.equal(compared.comparison[0].purchaseQuantity, 2);
+  assert.equal(compared.comparison[0].warehouseQuantity, 1);
+  assert.equal(compared.comparison[0].poNumber, 'IO-MEC2408011-04-260105');
+});
+
 test('uses purchase quantity as baseline and describes each warehouse supplier', () => {
   const purchases = [{ projectCode:'AUT1', itemCode:'ABC-01', itemName:'Motor', quantity:12 }];
   const scans = [
@@ -115,12 +167,14 @@ test('assigns export operators from warehouse arrival and ordering state', () =>
   assert.equal(rows.find(row => row.drawingCode === 'NO-ORDER').operator, 'PU check');
 });
 
-test('uses the purchase supplier when the shortage has no warehouse supplier', () => {
-  const purchases = [{ projectCode:'AUT1', itemCode:'A-01', itemName:'Item', supplier:'IDEC', quantity:3 }];
+test('uses the purchase supplier and marks the shortage when no receipt source has the PR item', () => {
+  const purchases = [{ projectCode:'AUT1', itemCode:'A-01', itemName:'Item', supplier:'IDEC', purchaseOrder:'PR-A-01', quantity:3 }];
   const scans = [{ projectCode:'AUT1', drawingCode:'A-01', quantity:1 }];
   const row = buildComparison(purchases, scans, [], 95).shortage[0];
   assert.equal(row.supplier, 'IDEC');
   assert.equal(row.operator, 'PU check');
+  assert.equal(row.hasReceiptRecord, false);
+  assert.equal(row.purchaseOrder, 'PR-A-01');
 });
 
 test('marks scan and warehouse as excess when they are greater than purchase quantity', () => {

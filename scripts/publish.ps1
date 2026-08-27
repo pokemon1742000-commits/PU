@@ -40,6 +40,22 @@ function Invoke-Probe {
   }
 }
 
+function Ensure-GitIdentity {
+  $nameProbe = Invoke-Probe { git config --get user.name }
+  $emailProbe = Invoke-Probe { git config --get user.email }
+  if ($nameProbe.Output -and $emailProbe.Output) { return }
+
+  $lastName = (Invoke-Probe { git log -1 --format=%an }).Output
+  $lastEmail = (Invoke-Probe { git log -1 --format=%ae }).Output
+  $name = if ($nameProbe.Output) { $nameProbe.Output } elseif ($lastName) { $lastName } else { 'pokemon1742000-commits' }
+  $email = if ($emailProbe.Output) { $emailProbe.Output } elseif ($lastEmail) { $lastEmail } else { 'pokemon1742000-commits@users.noreply.github.com' }
+
+  Invoke-Checked 'Configure repository Git author' {
+    git config --local user.name $name
+    if ($LASTEXITCODE -eq 0) { git config --local user.email $email }
+  }
+}
+
 $projectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $projectRoot
 
@@ -64,6 +80,8 @@ $repositoryProbe = Invoke-Probe { git rev-parse --is-inside-work-tree }
 if ($repositoryProbe.ExitCode -ne 0 -or $repositoryProbe.Output -ne 'true') {
   Invoke-Checked 'Initialize Git repository' { git init -b main }
 }
+
+Ensure-GitIdentity
 
 $originProbe = Invoke-Probe { git remote get-url origin }
 $origin = $originProbe.Output

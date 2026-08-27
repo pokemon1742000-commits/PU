@@ -62,7 +62,7 @@ test('comparison export combines multiple scan projects into one sheet', async t
   assert.equal(workbook.getWorksheet('NHIỀU DỰ ÁN').getCell('A11').value, 2);
 });
 
-test('comparison export leaves the Note column blank', async t => {
+test('comparison export only notes PU Check when a purchase PR has no warehouse or workshop record', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'comparison-notes-'));
   t.after(() => fs.rm(dir, { recursive:true, force:true }));
   const file = path.join(dir, 'notes.xlsx');
@@ -70,7 +70,7 @@ test('comparison export leaves the Note column blank', async t => {
     { projectCode:'MEC1', drawingCode:'ENOUGH', purchaseQuantity:2, scanQuantity:2, warehouseQuantity:0, poNumber:'PO-OK', dueDate:'24/08/2026', note:'old detail' },
     { projectCode:'MEC1', drawingCode:'ARRIVED', purchaseQuantity:3, scanQuantity:1, warehouseQuantity:3, poNumber:'PO-ARRIVED', dueDate:'24/08/2026' },
     { projectCode:'MEC1', drawingCode:'NOT-ARRIVED', purchaseQuantity:3, scanQuantity:0, warehouseQuantity:0, supplier:'NCC A', poNumber:'PO-01', dueDate:'25/08/2026', warehouseOrderPlaced:true },
-    { projectCode:'MEC1', drawingCode:'NO-ORDER', purchaseQuantity:3, scanQuantity:0, warehouseQuantity:0, warehouseOrderPlaced:false },
+    { projectCode:'MEC1', drawingCode:'NO-ORDER', purchaseOrder:'PR-NO-ORDER', purchaseQuantity:3, scanQuantity:0, warehouseQuantity:0, warehouseOrderPlaced:false, hasReceiptRecord:false },
     { projectCode:'MEC1', drawingCode:'PARTIAL', purchaseQuantity:3, scanQuantity:1, warehouseQuantity:2, supplier:'NCC B', poNumber:'PO-02', dueDate:'26/08/2026', warehouseOrderPlaced:true },
     { projectCode:'MEC1', drawingCode:'EXCESS', purchaseQuantity:3, scanQuantity:4, warehouseQuantity:3, poNumber:'PO-X', dueDate:'30/08/2026' },
     { projectCode:'MEC1', drawingCode:'NO-PURCHASE-SCAN', purchaseQuantity:0, scanQuantity:2, warehouseQuantity:0, poNumber:'PO-NP1', dueDate:'31/08/2026' },
@@ -79,7 +79,7 @@ test('comparison export leaves the Note column blank', async t => {
   const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile(file);
   const sheet = workbook.getWorksheet('MEC1');
   assert.deepEqual([10, 11, 12, 13, 14, 15, 16, 17].map(row => sheet.getCell(`L${row}`).value || ''), [
-    '', '', '', '', '', '', '', ''
+    '', '', '', 'PU Check', '', '', '', ''
   ]);
   assert.deepEqual([10, 11, 12, 13, 14, 15, 16, 17].map(row => sheet.getCell(`M${row}`).value || ''), [
     '', 'Kho', 'NCC A', 'PU check', 'NCC B', '', 'PU check', 'PU check'

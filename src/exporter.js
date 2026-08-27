@@ -4,6 +4,15 @@ const projectReportDefinition = ['STT','Mã dự án','Mã hàng','Tên hàng','
 const statusOptions = ['OK','Chưa về','Chưa về đủ','Đã về','Chưa bắn code','Check lại','Hủy','Tồn','Common'];
 
 async function exportWorkbook(file, _selected, session) {
+  const wb = createWorkbook(session);
+  await wb.xlsx.writeFile(file);
+}
+
+async function exportWorkbookBuffer(session) {
+  return createWorkbook(session).xlsx.writeBuffer();
+}
+
+function createWorkbook(session) {
   const rows = session.comparison || [];
   const projects = [...new Set(rows.map(row => String(row.projectCode || '').trim()).filter(Boolean))];
   const sheetName = projects.length === 1 ? projects[0] : projects.length > 1 ? 'NHIỀU DỰ ÁN' : 'So Sánh';
@@ -12,7 +21,7 @@ async function exportWorkbook(file, _selected, session) {
   wb.created = new Date();
   const ws = wb.addWorksheet(safeWorksheetName(sheetName));
   formatProjectReportSheet(ws, rows);
-  await wb.xlsx.writeFile(file);
+  return wb;
 }
 
 function formatProjectReportSheet(ws, rows) {
@@ -44,10 +53,11 @@ function formatProjectReportSheet(ws, rows) {
     const statusValue = exportStatus(row);
     const showOrderDetails = ['Chưa về','Chưa về đủ'].includes(statusValue);
     const operatorValue = exportOperator(row);
+    const noteValue = exportNote(row);
     const output = ws.addRow([
       index + 1, row.projectCode, row.drawingCode, row.itemName,
       row.purchaseQuantity, row.scanQuantity, row.maker, row.scanDate,
-      row.warehouseDate, row.warehouseQuantity, statusValue, '', operatorValue,
+      row.warehouseDate, row.warehouseQuantity, statusValue, noteValue, operatorValue,
       showOrderDetails ? (row.poNumber || '') : '', showOrderDetails ? (row.dueDate || '') : '', '', ''
     ]);
     output.font = { name:'Aptos Narrow', size:11 };
@@ -107,6 +117,11 @@ function exportOperator(row) {
   return hasWarehouseOrder ? (row.supplier || 'PU check') : 'PU check';
 }
 
+function exportNote(row) {
+  const hasPurchaseRequest = Boolean(String(row.purchaseOrder || '').trim());
+  return hasPurchaseRequest && row.hasReceiptRecord === false ? 'PU Check' : '';
+}
+
 function replacementText(oldValue, newValue) {
   return { richText: [
     { font:{ name:'Aptos Narrow', size:11, strike:true, color:{ argb:'FF7A8791' } }, text:String(oldValue) },
@@ -118,4 +133,4 @@ function fill(argb) {
   return { type:'pattern', pattern:'solid', fgColor:{argb} };
 }
 
-module.exports = { exportWorkbook };
+module.exports = { exportWorkbook, exportWorkbookBuffer };
