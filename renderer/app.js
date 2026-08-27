@@ -1,5 +1,5 @@
 const $ = s => document.querySelector(s); const $$ = s => [...document.querySelectorAll(s)];
-let state = { counts:{}, rawCounts:{}, sources:[] }, activeTable = 'comparison', rawMode = false, tableRows = [], tablePage = { page:1, pageSize:100, total:0, totalPages:1 }, replacementPage = 1, tableRequest = 0, searchTimer, thresholdTimer, confirmationTimer, confirmationInFlight = false, confirmationQueue = new Map(), sheetPickerFiles = [], sheetPickerResolve;
+let state = { counts:{}, rawCounts:{}, sources:[] }, activeTable = 'comparison', rawMode = false, tableRows = [], tablePage = { page:1, pageSize:100, total:0, totalPages:1 }, auditPage = { page:1, pageSize:100, total:0, totalPages:1 }, replacementPage = 1, tableRequest = 0, searchTimer, thresholdTimer, confirmationTimer, confirmationInFlight = false, confirmationQueue = new Map(), sheetPickerFiles = [], sheetPickerResolve;
 const REPLACEMENT_PAGE_SIZE = 100;
 const tableLabels = { purchase:'Dữ Liệu Đặt Hàng — Sheet kiểm tra', scan:'Dữ Liệu Quét Mã — Sheet kiểm tra', warehouse:'Dữ Liệu Nhập Kho — Sheet kiểm tra', workshop:'Dữ Liệu Xưởng Gia Công — Sheet kiểm tra', jobCodes:'Job Code — Cơ sở dữ liệu tích lũy', comparison:'Xác Nhận Mã Đối Chiếu', enough:'Đủ hàng', shortage:'Thiếu hàng', excess:'Thừa hàng', warnings:'Cảnh Báo' };
 const columns = {
@@ -39,11 +39,44 @@ function bind(){
   window.api.onUpdateStatus(renderUpdateStatus);
   $('#clearSession').onclick=async()=>{if(confirm('Bạn có chắc muốn xóa dữ liệu Quét Mã và các xác nhận? Dữ liệu Mua Hàng, Nhập Kho và Xưởng Gia Công sẽ được giữ lại.')) await run(async()=>refresh(await window.api.clearSession()),'Đã clear phiên làm việc');};
   $('#deleteDatabase').onclick=()=>startDelete();
+  $('#runDataAudit').onclick=runCurrentDataAudit;
+  $('#runSelfCheck').onclick=runApplicationSelfCheck;
   $('#confirmDelete').onclick=e=>{e.preventDefault();advanceDelete();};
   $$('.theme-dot').forEach(b=>b.onclick=()=>applyTheme(b.dataset.theme));
   window.addEventListener('resize',updateNavIndicator);
 }
 function showInfoPanel(panelId){$$('.info-panel').forEach(panel=>panel.hidden=panel.id!==panelId);$$('.info-tab').forEach(button=>button.classList.toggle('active',button.dataset.infoPanel===panelId))}
+async function runCurrentDataAudit(){
+  const button=$('#runDataAudit'),title=$('#selfCheckTitle'),summary=$('#selfCheckSummary');
+  button.disabled=true;button.textContent='Đang đối soát...';title.textContent='Đang kiểm tra dữ liệu';summary.textContent='Đang so sánh từng mã và số lượng giữa các nguồn.';
+  try{
+    const report=await window.api.runDataAudit();
+    $('#auditStats').hidden=false;$('#auditMatched').textContent=report.matched;$('#auditDifference').textContent=report.difference;$('#auditReview').textContent=report.review;
+    title.textContent=!report.ready?'CHƯA ĐỦ DỮ LIỆU':report.ok?'DỮ LIỆU KHỚP':'CÓ DÒNG CẦN XEM LẠI';
+    title.className=report.ok?'self-check-pass':report.ready?'self-check-fail':'';
+    summary.textContent=!report.ready?'Chưa có kết quả đối chiếu. Hãy nạp dữ liệu Quét Mã cùng Mua Hàng hoặc Nhập Kho/XGC.':`${report.matched}/${report.total} dòng khớp · ${report.difference} dòng chênh lệch số lượng · ${report.review} dòng cần kiểm tra mã`;
+    await loadAuditPage(1);
+    toast(report.ok?'Toàn bộ dữ liệu đang khớp':`Có ${report.difference+report.review} dòng cần xem lại`,!report.ok);
+  }catch(error){title.textContent='KHÔNG THỂ KIỂM TRA';title.className='self-check-fail';summary.textContent=error.message;toast(`Lỗi kiểm tra dữ liệu: ${error.message}`,true)}
+  finally{button.disabled=false;button.textContent='Kiểm tra lại dữ liệu'}
+}
+async function loadAuditPage(page){
+  const result=await window.api.getRows('dataAudit',{page,pageSize:100});auditPage=result;
+  $('#auditBody').innerHTML=result.rows.length?result.rows.map(row=>`<tr class="audit-${row.auditStatus==='KHỚP'?'matched':row.auditStatus==='CHÊNH LỆCH'?'difference':'review'}"><td>${row.stt}</td><td><span class="audit-badge">${escapeHtml(row.auditStatus)}</span></td><td><strong>${escapeHtml(row.projectCode)}</strong></td><td>${escapeHtml(row.scanCode)}</td><td>${escapeHtml(row.purchaseCode||'—')}</td><td>${escapeHtml(row.receiptCode||'—')}${row.receiptSource?`<br><small>${escapeHtml(row.receiptSource)}</small>`:''}</td><td>${escapeHtml(row.purchaseQuantity)}</td><td>${escapeHtml(row.scanQuantity)}</td><td>${escapeHtml(row.receiptQuantity)}</td><td>${escapeHtml(row.matchMethod)}</td><td>${escapeHtml(row.reason)}</td></tr>`).join(''):'<tr><td colspan="11" class="placeholder">Chưa có dữ liệu đối chiếu để kiểm tra.</td></tr>';
+  const items=paginationSequence(result.page,result.totalPages);$('#auditPagination').innerHTML=`<span class="page-summary">${result.total?(result.page-1)*result.pageSize+1:0}–${Math.min(result.page*result.pageSize,result.total)} / ${result.total} dòng</span><div class="page-icons">${items.map(item=>item==='…'?'<span class="page-ellipsis">…</span>':`<button class="page-icon${item===result.page?' active':''}" data-page="${item}">${item}</button>`).join('')}</div>`;$$('#auditPagination .page-icon').forEach(item=>item.onclick=()=>loadAuditPage(Number(item.dataset.page)));
+}
+async function runApplicationSelfCheck(){
+  const button=$('#runSelfCheck'),title=$('#technicalCheckTitle'),results=$('#selfCheckResults');
+  button.disabled=true;button.textContent='Đang kiểm tra...';title.textContent='Đang chạy';results.innerHTML='<div class="self-check-empty">Đang chạy các tình huống kiểm tra…</div>';
+  try{
+    const report=await window.api.runSelfCheck();
+    title.textContent=report.ok?'ĐẠT':'KHÔNG ĐẠT';
+    title.className=report.ok?'self-check-pass':'self-check-fail';
+    results.innerHTML=report.checks.map(item=>`<article class="self-check-result ${item.passed?'passed':'failed'}"><span class="self-check-mark">${item.passed?'✓':'!'}</span><div><strong>${escapeHtml(item.name)}</strong><p>${escapeHtml(item.detail)}</p></div><small>${item.durationMs} ms</small></article>`).join('');
+    toast(report.ok?'Tự kiểm tra: tất cả mục đều đạt':`Tự kiểm tra: ${report.failed} mục không đạt`,!report.ok);
+  }catch(error){title.textContent='KHÔNG THỂ KIỂM TRA';title.className='self-check-fail';results.innerHTML='<div class="self-check-empty">Hãy đóng và mở lại ứng dụng rồi thử lại.</div>';toast(`Lỗi tự kiểm tra: ${error.message}`,true)}
+  finally{button.disabled=false;button.textContent='Kiểm tra lại'}
+}
 async function checkForUpdates(){
   const button=$('#updateBtn');
   button.disabled=true;

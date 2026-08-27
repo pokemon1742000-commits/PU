@@ -268,6 +268,18 @@ test('sidebar exposes database management and keeps the protected delete action 
   assert.match(js, /deleteStep=1/);
 });
 
+test('application exposes actual-data audit and a separate non-destructive technical check', () => {
+  assert.match(html, /id="selfCheckNav"[\s\S]*Kiểm tra dữ liệu khớp/);
+  assert.match(html, /id="selfCheck" class="view"[\s\S]*id="runDataAudit"[\s\S]*id="auditBody"[\s\S]*id="runSelfCheck"/);
+  assert.match(preload, /runDataAudit:.*data-audit:run/);
+  assert.match(main, /ipcMain\.handle\('data-audit:run'/);
+  assert.match(js, /window\.api\.runDataAudit\(\)/);
+  assert.match(preload, /runSelfCheck:.*self-check:run/);
+  assert.match(main, /ipcMain\.handle\('self-check:run'/);
+  assert.match(js, /window\.api\.runSelfCheck\(\)/);
+  assert.match(js, /report\.ok\?'ĐẠT':'KHÔNG ĐẠT'/);
+});
+
 test('installed app exposes a silent GitHub update button and automated release command', () => {
   assert.match(html, /id="updateBtn"/);
   assert.match(preload, /update:check/);

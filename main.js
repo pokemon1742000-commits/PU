@@ -6,6 +6,8 @@ const { autoUpdater } = require('electron-updater');
 const { buildComparison, resolveReview, filterPurchasesByProjectPrefix, prioritizeProjectWarnings, mergePurchaseRows, mergeWarehouseRows, mergeWorkshopRows } = require('./src/processor');
 const { exportWorkbook } = require('./src/exporter');
 const { Database } = require('./src/storage');
+const { runSelfCheck } = require('./src/self-check');
+const { auditSessionData } = require('./src/data-audit');
 
 let win;
 let session = emptySession();
@@ -20,7 +22,7 @@ let builtInJobCodeReference;
 app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096');
 
 function emptySession() {
-  return { purchase: [], purchaseAll: [], purchaseDetails: [], purchaseReplacements: [], scans: [], scanDetails: [], warehouse: [], warehouseDetails: [], workshop: [], workshopDetails: [], comparisonWarehouse: [], comparison: [], review: [], warnings: [], formatWarnings: [], jobCodes: [], jobCodeDetails: [], jobCodeNotes: new Map(), decisions: new Map(), sources: [] };
+  return { purchase: [], purchaseAll: [], purchaseDetails: [], purchaseReplacements: [], scans: [], scanDetails: [], warehouse: [], warehouseDetails: [], workshop: [], workshopDetails: [], comparisonWarehouse: [], comparison: [], dataAudit: [], review: [], warnings: [], formatWarnings: [], jobCodes: [], jobCodeDetails: [], jobCodeNotes: new Map(), decisions: new Map(), sources: [] };
 }
 
 function createWindow() {
@@ -56,6 +58,13 @@ app.on('window-all-closed', () => process.platform !== 'darwin' && app.quit());
 
 function registerIpc() {
   ipcMain.handle('state:get', async () => summary());
+  ipcMain.handle('self-check:run', async () => runSelfCheck({ rootDir:__dirname, jobCodeFile:BUILT_IN_JOB_CODE_FILE }));
+  ipcMain.handle('data-audit:run', async () => {
+    const report = auditSessionData(session);
+    session.dataAudit = report.rows;
+    const { rows, ...summary } = report;
+    return summary;
+  });
   ipcMain.handle('external:open', async (_e, url) => {
     if (url !== 'https://github.com/pokemon1742000-commits/PU') throw new Error('Đường dẫn không được phép.');
     await shell.openExternal(url);
@@ -182,7 +191,7 @@ async function load(kind, selections) {
 
 function rowsFor(name, options = {}) {
   const map = {
-    purchase: session.purchase, scan: session.scans, warehouse: session.warehouse, workshop: session.workshop,
+    purchase: session.purchase, scan: session.scans, warehouse: session.warehouse, workshop: session.workshop, dataAudit:session.dataAudit,
     comparison: session.comparison, enough: session.enough, shortage: session.shortage,
     excess: session.excess, review: session.review, warnings: session.warnings,
     sources: session.sources, purchaseDetails: session.purchaseDetails, scanDetails: session.scanDetails, warehouseDetails: session.warehouseDetails, workshopDetails: session.workshopDetails,
@@ -202,7 +211,7 @@ function rowsFor(name, options = {}) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const page = Math.min(Math.max(Number(options.page) || 1, 1), totalPages);
   const start = (page - 1) * pageSize;
-  const numberedTables = ['purchase', 'scan', 'warehouse', 'workshop', 'jobCodes', 'comparison', 'enough', 'shortage', 'excess', 'review', 'warnings', 'purchaseDetails', 'scanDetails', 'warehouseDetails', 'workshopDetails', 'jobCodeDetails'];
+  const numberedTables = ['purchase', 'scan', 'warehouse', 'workshop', 'dataAudit', 'jobCodes', 'comparison', 'enough', 'shortage', 'excess', 'review', 'warnings', 'purchaseDetails', 'scanDetails', 'warehouseDetails', 'workshopDetails', 'jobCodeDetails'];
   const rows = filtered.slice(start, start + pageSize).map((row, index) =>
     numberedTables.includes(name) ? { ...row, stt: start + index + 1 } : row
   );
@@ -334,6 +343,7 @@ function runComparison(threshold = 91, confirmThreshold = confirmationThreshold)
   session.comparisonWarehouse = mergeWarehouseRows([...(session.warehouse || []), ...(session.workshop || [])]);
   const out = buildComparison(session.purchase, session.scans, session.comparisonWarehouse, comparisonThreshold, session.decisions || new Map(), confirmationThreshold, session.purchaseReplacements);
   Object.assign(session, out);
+  session.dataAudit = [];
 }
 
 function autoCompareWhenReady() {

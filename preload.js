@@ -1,6 +1,8 @@
 const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('api', {
   getState: () => ipcRenderer.invoke('state:get'),
+  runSelfCheck: () => ipcRenderer.invoke('self-check:run'),
+  runDataAudit: () => ipcRenderer.invoke('data-audit:run'),
   openExternal: url => ipcRenderer.invoke('external:open', url),
   checkForUpdates: () => ipcRenderer.invoke('update:check'),
   onUpdateStatus: callback => {

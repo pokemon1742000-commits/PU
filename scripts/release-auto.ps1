@@ -135,6 +135,7 @@ try {
 
   Invoke-Checked 'Run tests' { npm test }
   Invoke-Checked 'Check syntax' { npm run check }
+  Invoke-Checked 'Run application self-check' { npm run verify }
   Invoke-Checked 'Build Windows updater installer' {
     npx electron-builder --win nsis --publish never "--config.directories.output=$buildOutput"
   }
