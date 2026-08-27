@@ -11,6 +11,61 @@ function sameQuantity(a, b) {
   return Math.abs(number(a) - number(b)) < 1e-8;
 }
 
+function norm(value) {
+  return clean(value).toUpperCase();
+}
+
+function baseCode(value) {
+  const code = norm(value);
+  return code.endsWith('_GC') ? code.slice(0, -3) : code;
+}
+
+function sourceRows(session, detailKey, mergedKey) {
+  const details = session?.[detailKey] || [];
+  return details.length ? details : (session?.[mergedKey] || []);
+}
+
+function loadedOccurrences(session) {
+  const configs = [
+    ['purchase','Mua Hàng',sourceRows(session, 'purchaseDetails', 'purchase'),'itemCode','quantity'],
+    ['scan','Quét Mã',sourceRows(session, 'scanDetails', 'scans'),'drawingCode','quantity'],
+    ['warehouse','Nhập Kho',sourceRows(session, 'warehouseDetails', 'warehouse'),'itemCode','receivedQuantity'],
+    ['workshop','Xưởng Gia Công',sourceRows(session, 'workshopDetails', 'workshop'),'itemCode','receivedQuantity']
+  ];
+  const rows = [];
+  for (const [source, sourceLabel, data, codeField, quantityField] of configs) for (const row of data) {
+    const code = clean(row[codeField]);
+    if (!code) continue;
+    rows.push({
+      source, sourceLabel, projectCode:clean(row.projectCode), code,
+      file:clean(row.sourceFile) || '(Dữ liệu đã lưu)', sheet:clean(row.sourceSheet),
+      row:row.sourceRow ?? '', quantity:number(row[quantityField])
+    });
+  }
+  return rows;
+}
+
+function occurrenceIndex(session) {
+  const index = new Map();
+  for (const row of loadedOccurrences(session)) {
+    const key = `${norm(row.projectCode)}|${baseCode(row.code)}`;
+    if (!index.has(key)) index.set(key, []);
+    index.get(key).push(row);
+  }
+  return index;
+}
+
+function findOccurrences(index, projectCode, code, sources) {
+  if (!clean(code)) return [];
+  const allowed = new Set(sources);
+  return (index.get(`${norm(projectCode)}|${baseCode(code)}`) || []).filter(row => allowed.has(row.source));
+}
+
+function locationText(rows) {
+  const locations = rows.map(row => `${row.file}${row.sheet ? ` [${row.sheet}]` : ''}${row.row !== '' ? ` dòng ${row.row}` : ''}`);
+  return [...new Set(locations)].join(' • ');
+}
+
 function matchDescription(row) {
   const kinds = [row.purchaseMatchKind, row.warehouseMatchKind].filter(Boolean);
   const scores = [row.purchaseMatchScore, row.warehouseMatchScore].filter(value => Number.isFinite(Number(value)));
@@ -24,7 +79,7 @@ function matchDescription(row) {
   return 'Khớp chính xác';
 }
 
-function auditRow(row, index) {
+function auditRow(row, index, locations) {
   const purchase = number(row.purchaseQuantity);
   const scan = number(row.scanQuantity);
   const receipt = number(row.warehouseQuantity);
@@ -60,13 +115,17 @@ function auditRow(row, index) {
     receiptQuantity:receipt,
     matchMethod:matchDescription(row),
     reason:reasons.join('; ') || 'Mã và số lượng của ba nguồn đều khớp',
-    purchaseOrder:clean(row.purchaseOrder)
+    purchaseOrder:clean(row.purchaseOrder),
+    scanLocation:locationText(findOccurrences(locations, row.projectCode, row.drawingCode, ['scan'])),
+    purchaseLocation:locationText(findOccurrences(locations, row.projectCode, row.purchaseMatchedCode || row.replacementItemCode, ['purchase'])),
+    receiptLocation:locationText(findOccurrences(locations, row.projectCode, row.warehouseMatchedCode, ['warehouse','workshop']))
   };
 }
 
 function auditSessionData(session) {
   const comparison = session?.comparison || [];
-  const rows = comparison.map(auditRow);
+  const locations = occurrenceIndex(session);
+  const rows = comparison.map((row, index) => auditRow(row, index, locations));
   const counts = { matched:0, difference:0, review:0 };
   for (const row of rows) {
     if (row.auditStatus === 'KHỚP') counts.matched++;
@@ -83,4 +142,20 @@ function auditSessionData(session) {
   };
 }
 
-module.exports = { auditSessionData };
+function searchLoadedCode(session, projectCode, code) {
+  const requestedCode = clean(code);
+  if (!clean(projectCode) || !requestedCode) return { projectCode:clean(projectCode), code:requestedCode, total:0, sourceCount:0, duplicate:false, occurrences:[] };
+  const rows = occurrenceIndex(session).get(`${norm(projectCode)}|${baseCode(requestedCode)}`) || [];
+  const occurrences = rows.map(row => ({ ...row, matchType:norm(row.code) === norm(requestedCode) ? 'Trùng chính xác' : 'Tương ứng _GC' }));
+  return {
+    projectCode:clean(projectCode), code:requestedCode,
+    total:occurrences.length,
+    sourceCount:new Set(occurrences.map(row => row.source)).size,
+    fileCount:new Set(occurrences.map(row => `${row.source}|${row.file}|${row.sheet}`)).size,
+    duplicate:occurrences.length > 1,
+    truncated:occurrences.length > 500,
+    occurrences:occurrences.slice(0, 500)
+  };
+}
+
+module.exports = { auditSessionData, searchLoadedCode };

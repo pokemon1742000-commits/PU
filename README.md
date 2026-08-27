@@ -2,7 +2,7 @@
 
 Ứng dụng Electron dành cho Windows, dùng để nhập và đối chiếu dữ liệu **Mua Hàng**, **Quét Mã**, **Nhập Kho** và **Xưởng Gia Công**, sau đó xuất báo cáo Excel theo mẫu `SỐ LIỆU XUẤT KHO`.
 
-- Phiên bản hiện tại: **v1.0.10**
+- Phiên bản hiện tại: **v1.0.11**
 - Repository: <https://github.com/pokemon1742000-commits/PU>
 - Chế độ chạy mặc định: ứng dụng desktop Electron
 
@@ -246,6 +246,8 @@ Báo cáo hiển thị:
 - số lượng của cả ba nguồn;
 - cách ghép: chính xác, hậu tố `_GC`, gần đúng, xác nhận thủ công hoặc không tìm thấy;
 - giải thích nguyên nhân.
+
+Rê chuột vào Mã Quét, Mã Mua Hàng hoặc Mã Nhập Kho/XGC để xem nhanh tên file, sheet và số dòng nguồn. Nút **Tìm mã** tìm mã đó trong toàn bộ file đã nạp, đồng thời nhận cả mã tương ứng chỉ khác hậu tố `_GC`. Kết quả tìm kiếm liệt kê nguồn, mã, file, sheet, dòng, số lượng và cho biết mã có xuất hiện nhiều lần hay không.
 
 Mỗi dòng được phân loại:
 

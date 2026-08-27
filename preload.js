@@ -3,6 +3,7 @@ contextBridge.exposeInMainWorld('api', {
   getState: () => ipcRenderer.invoke('state:get'),
   runSelfCheck: () => ipcRenderer.invoke('self-check:run'),
   runDataAudit: () => ipcRenderer.invoke('data-audit:run'),
+  searchLoadedCode: payload => ipcRenderer.invoke('data-audit:search', payload),
   openExternal: url => ipcRenderer.invoke('external:open', url),
   checkForUpdates: () => ipcRenderer.invoke('update:check'),
   onUpdateStatus: callback => {

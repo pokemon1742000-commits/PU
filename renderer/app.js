@@ -41,6 +41,8 @@ function bind(){
   $('#deleteDatabase').onclick=()=>startDelete();
   $('#runDataAudit').onclick=runCurrentDataAudit;
   $('#runSelfCheck').onclick=runApplicationSelfCheck;
+  $('#closeCodeSearch').onclick=()=>$('#codeSearchDialog').close();
+  $('#codeSearchDialog').onclick=event=>{if(event.target===$('#codeSearchDialog'))$('#codeSearchDialog').close()};
   $('#confirmDelete').onclick=e=>{e.preventDefault();advanceDelete();};
   $$('.theme-dot').forEach(b=>b.onclick=()=>applyTheme(b.dataset.theme));
   window.addEventListener('resize',updateNavIndicator);
@@ -62,8 +64,18 @@ async function runCurrentDataAudit(){
 }
 async function loadAuditPage(page){
   const result=await window.api.getRows('dataAudit',{page,pageSize:100});auditPage=result;
-  $('#auditBody').innerHTML=result.rows.length?result.rows.map(row=>`<tr class="audit-${row.auditStatus==='KHỚP'?'matched':row.auditStatus==='CHÊNH LỆCH'?'difference':'review'}"><td>${row.stt}</td><td><span class="audit-badge">${escapeHtml(row.auditStatus)}</span></td><td><strong>${escapeHtml(row.projectCode)}</strong></td><td>${escapeHtml(row.scanCode)}</td><td>${escapeHtml(row.purchaseCode||'—')}</td><td>${escapeHtml(row.receiptCode||'—')}${row.receiptSource?`<br><small>${escapeHtml(row.receiptSource)}</small>`:''}</td><td>${escapeHtml(row.purchaseQuantity)}</td><td>${escapeHtml(row.scanQuantity)}</td><td>${escapeHtml(row.receiptQuantity)}</td><td>${escapeHtml(row.matchMethod)}</td><td>${escapeHtml(row.reason)}</td></tr>`).join(''):'<tr><td colspan="11" class="placeholder">Chưa có dữ liệu đối chiếu để kiểm tra.</td></tr>';
+  $('#auditBody').innerHTML=result.rows.length?result.rows.map(row=>`<tr class="audit-${row.auditStatus==='KHỚP'?'matched':row.auditStatus==='CHÊNH LỆCH'?'difference':'review'}"><td>${row.stt}</td><td><span class="audit-badge">${escapeHtml(row.auditStatus)}</span></td><td><strong>${escapeHtml(row.projectCode)}</strong></td><td>${auditCodeCell(row.scanCode,row.scanLocation)}</td><td>${auditCodeCell(row.purchaseCode,row.purchaseLocation)}</td><td>${auditCodeCell(row.receiptCode,row.receiptLocation)}${row.receiptSource?`<br><small>${escapeHtml(row.receiptSource)}</small>`:''}</td><td>${escapeHtml(row.purchaseQuantity)}</td><td>${escapeHtml(row.scanQuantity)}</td><td>${escapeHtml(row.receiptQuantity)}</td><td>${escapeHtml(row.matchMethod)}</td><td>${escapeHtml(row.reason)}</td><td><button class="audit-search-button" type="button" data-project="${escapeHtml(row.projectCode)}" data-code="${escapeHtml(row.scanCode||row.purchaseCode||row.receiptCode)}" title="Tìm mã trong các file đã nạp" aria-label="Tìm mã trong các file đã nạp"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"></circle><path d="M12.5 12.5L17 17"></path></svg></button></td></tr>`).join(''):'<tr><td colspan="12" class="placeholder">Chưa có dữ liệu đối chiếu để kiểm tra.</td></tr>';
+  $$('#auditBody .audit-search-button').forEach(button=>button.onclick=()=>searchAuditCode(button.dataset.project,button.dataset.code));
   const items=paginationSequence(result.page,result.totalPages);$('#auditPagination').innerHTML=`<span class="page-summary">${result.total?(result.page-1)*result.pageSize+1:0}–${Math.min(result.page*result.pageSize,result.total)} / ${result.total} dòng</span><div class="page-icons">${items.map(item=>item==='…'?'<span class="page-ellipsis">…</span>':`<button class="page-icon${item===result.page?' active':''}" data-page="${item}">${item}</button>`).join('')}</div>`;$$('#auditPagination .page-icon').forEach(item=>item.onclick=()=>loadAuditPage(Number(item.dataset.page)));
+}
+function auditCodeCell(code,location){if(!code)return '<span class="audit-code-empty">—</span>';return `<span class="audit-code" tabindex="0" data-location="${escapeHtml(location||'Không có thông tin file/dòng nguồn')}">${escapeHtml(code)}</span>`}
+async function searchAuditCode(projectCode,code){
+  const dialog=$('#codeSearchDialog');$('#codeSearchTitle').textContent=`Tìm mã ${code}`;$('#codeSearchSummary').textContent='Đang tìm trong Mua Hàng, Quét Mã, Nhập Kho và Xưởng Gia Công…';$('#codeSearchBody').innerHTML='<tr><td colspan="7" class="placeholder">Đang tìm…</td></tr>';dialog.showModal();
+  try{
+    const result=await window.api.searchLoadedCode({projectCode,code});
+    $('#codeSearchSummary').textContent=result.total?`Tìm thấy ${result.total} dòng trong ${result.sourceCount} nguồn và ${result.fileCount} file/sheet${result.duplicate?' — có mã xuất hiện nhiều lần':' — không có mã trùng'}.`:'Không tìm thấy mã này trong các file đã nạp.';
+    $('#codeSearchBody').innerHTML=result.occurrences.length?result.occurrences.map(row=>`<tr><td><strong>${escapeHtml(row.sourceLabel)}</strong></td><td>${escapeHtml(row.code)}</td><td>${escapeHtml(row.matchType)}</td><td>${escapeHtml(row.file)}</td><td>${escapeHtml(row.sheet||'—')}</td><td>${escapeHtml(row.row||'—')}</td><td>${escapeHtml(row.quantity)}</td></tr>`).join(''):'<tr><td colspan="7" class="placeholder">Không có dòng nào.</td></tr>';
+  }catch(error){$('#codeSearchSummary').textContent=`Lỗi: ${error.message}`;$('#codeSearchBody').innerHTML='<tr><td colspan="7" class="placeholder">Không thể tìm mã.</td></tr>'}
 }
 async function runApplicationSelfCheck(){
   const button=$('#runSelfCheck'),title=$('#technicalCheckTitle'),results=$('#selfCheckResults');

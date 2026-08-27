@@ -159,13 +159,15 @@ test('application branding hides the native menu and shows the logo with the cur
   assert.match(main, /autoHideMenuBar: true/);
   assert.match(main, /win\.setMenuBarVisibility\(false\)/);
   assert.match(main, /icon: path\.join\(__dirname, 'assets', 'app-logo\.png'\)/);
-  assert.equal(packageJson.build.win.icon, 'assets/app-logo.png');
+  assert.equal(packageJson.build.win.icon, 'assets/app-logo.ico');
+  assert.equal(fs.existsSync(path.join(__dirname, '..', packageJson.build.win.icon)), true);
+  assert.equal(packageJson.build.compression, 'store');
   assert.equal(packageJson.build.files.includes('assets/app-logo.png'), true);
 });
 
 test('application information dialog shows version-specific improvements and the GitHub project link', () => {
   assert.match(html, /id="infoDialog"[\s\S]*id="appVersion"[\s\S]*id="githubLink"/);
-  for (const version of ['1.0.10','1.0.9','1.0.8','1.0.7','1.0.6','1.0.5','1.0.4','1.0.3','1.0.2','1.0.1','1.0.0']) assert.match(html, new RegExp(`data-version="${version.replaceAll('.', '\\.')}"`));
+  for (const version of ['1.0.11','1.0.10','1.0.9','1.0.8','1.0.7','1.0.6','1.0.5','1.0.4','1.0.3','1.0.2','1.0.1','1.0.0']) assert.match(html, new RegExp(`data-version="${version.replaceAll('.', '\\.')}"`));
   assert.match(html, /Lịch sử cải tiến/);
   assert.match(html, /current-version-badge/);
   assert.match(js, /note\.dataset\.version===version/);
@@ -272,8 +274,12 @@ test('application exposes actual-data audit and a separate non-destructive techn
   assert.match(html, /id="selfCheckNav"[\s\S]*Kiểm tra dữ liệu khớp/);
   assert.match(html, /id="selfCheck" class="view"[\s\S]*id="runDataAudit"[\s\S]*id="auditBody"[\s\S]*id="runSelfCheck"/);
   assert.match(preload, /runDataAudit:.*data-audit:run/);
+  assert.match(preload, /searchLoadedCode:.*data-audit:search/);
   assert.match(main, /ipcMain\.handle\('data-audit:run'/);
+  assert.match(main, /ipcMain\.handle\('data-audit:search'/);
   assert.match(js, /window\.api\.runDataAudit\(\)/);
+  assert.match(js, /window\.api\.searchLoadedCode\(/);
+  assert.match(html, /id="codeSearchDialog"[\s\S]*id="codeSearchBody"/);
   assert.match(preload, /runSelfCheck:.*self-check:run/);
   assert.match(main, /ipcMain\.handle\('self-check:run'/);
   assert.match(js, /window\.api\.runSelfCheck\(\)/);

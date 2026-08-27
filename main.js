@@ -7,7 +7,7 @@ const { buildComparison, resolveReview, filterPurchasesByProjectPrefix, prioriti
 const { exportWorkbook } = require('./src/exporter');
 const { Database } = require('./src/storage');
 const { runSelfCheck } = require('./src/self-check');
-const { auditSessionData } = require('./src/data-audit');
+const { auditSessionData, searchLoadedCode } = require('./src/data-audit');
 
 let win;
 let session = emptySession();
@@ -65,6 +65,7 @@ function registerIpc() {
     const { rows, ...summary } = report;
     return summary;
   });
+  ipcMain.handle('data-audit:search', async (_event, payload) => searchLoadedCode(session, payload?.projectCode, payload?.code));
   ipcMain.handle('external:open', async (_e, url) => {
     if (url !== 'https://github.com/pokemon1742000-commits/PU') throw new Error('Đường dẫn không được phép.');
     await shell.openExternal(url);

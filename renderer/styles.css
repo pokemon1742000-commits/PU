@@ -308,6 +308,22 @@ select {
 .technical-check { margin-top: 22px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface-muted); }
 .technical-check summary { cursor: pointer; color: var(--primary-dark); font-weight: 800; }
 .technical-check .self-check-heading { margin-top: 16px; }
+.audit-code { position: relative; display: inline-block; color: var(--primary-dark); font-weight: 750; cursor: help; text-decoration: underline dotted color-mix(in srgb, var(--primary) 55%, transparent); text-underline-offset: 3px; }
+.audit-code:is(:hover,:focus)::after { content: attr(data-location); position: absolute; z-index: 20; left: 0; bottom: calc(100% + 8px); width: max-content; max-width: 420px; padding: 9px 11px; border-radius: 9px; background: #16384b; color: #fff; box-shadow: 0 8px 24px rgba(5, 30, 44, .24); font-size: 12px; font-weight: 500; line-height: 1.45; white-space: normal; pointer-events: none; }
+.audit-code-empty { color: var(--muted); }
+.audit-search-button { display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 1px solid var(--primary); border-radius: 8px; background: var(--surface); color: var(--primary-dark); cursor: pointer; }
+.audit-search-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.audit-search-button:hover { background: var(--primary-soft); }
+.code-search-dialog { width: min(1000px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0; border: 0; border-radius: 20px; background: var(--surface); color: var(--text); box-shadow: 0 28px 80px rgba(10, 42, 61, .28); }
+.code-search-dialog::backdrop { background: rgba(7, 35, 53, .48); backdrop-filter: blur(4px); }
+.code-search-dialog section { padding: 22px; }
+.code-search-dialog header { display: flex; align-items: flex-start; gap: 16px; }
+.code-search-dialog header h2, .code-search-dialog header p { margin: 0; }
+.code-search-dialog header p { margin-top: 6px; color: var(--muted); }
+.code-search-table-wrap { max-height: min(65vh, 580px); margin-top: 18px; overflow: auto; border: 1px solid var(--line); border-radius: 13px; }
+.code-search-table-wrap table { width: 100%; border-collapse: collapse; }
+.code-search-table-wrap :is(th,td) { padding: 10px 12px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; }
+.code-search-table-wrap th { position: sticky; top: 0; background: var(--primary-soft); color: var(--primary-dark); }
 
 @media (max-width: 720px) {
   .info-dialog section { padding: 18px; }

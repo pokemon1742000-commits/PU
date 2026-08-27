@@ -137,7 +137,9 @@ try {
   Invoke-Checked 'Check syntax' { npm run check }
   Invoke-Checked 'Run application self-check' { npm run verify }
   Invoke-Checked 'Build Windows updater installer' {
-    npx electron-builder --win nsis --publish never "--config.directories.output=$buildOutput"
+    # `store` avoids the memory-heavy 7-Zip compression pass. The resulting
+    # installer is virtually the same size because Electron binaries are already compressed.
+    npx electron-builder --win nsis --publish never --config.compression=store "--config.directories.output=$buildOutput"
   }
 
   $releasePaths = @(
