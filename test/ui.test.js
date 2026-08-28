@@ -69,7 +69,8 @@ test('workshop import exposes the XGC button, table, mapping, and raw-data view'
   }
   assert.match(js, /workshop:'workshopDetails'/);
   assert.match(processor, /if \(kind === 'workshop'\) return processWorkshop\(files\)/);
-  assert.match(processor, /\/_GC\$\/i\.test\(itemCode\)/);
+  assert.match(processor, /if \(!itemCode\) continue/);
+  assert.doesNotMatch(processor, /if \(!\/_GC\$\/i\.test\(itemCode\)\) continue/);
 });
 
 test('scan, warehouse, and workshop imports persist and merge incrementally across app restarts', () => {

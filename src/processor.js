@@ -48,7 +48,9 @@ async function listWorkbookSheets(file) {
   const options = { ignoreNodes: ['dataValidations','hyperlinks','printOptions','pageMargins','pageSetup','headerFooter','drawing','picture','sheetProtection','conditionalFormatting','extLst'] };
   if (typeof file === 'string') await workbook.xlsx.readFile(file, options);
   else await workbook.xlsx.load(file instanceof ArrayBuffer ? new Uint8Array(file) : file, options);
-  return workbook.worksheets.map(worksheet => ({ name: worksheet.name, rowCount: worksheet.rowCount }));
+  // rowCount follows Excel's formatted range and can report 1,048,576 when a
+  // style reaches the last row. actualRowCount reflects rows containing values.
+  return workbook.worksheets.map(worksheet => ({ name: worksheet.name, rowCount: worksheet.actualRowCount }));
 }
 async function* worksheetRows(worksheet) {
   for (let rowNo = 1; rowNo <= worksheet.rowCount; rowNo++) {
@@ -216,7 +218,18 @@ async function processScans(files) {
           continue;
         }
         const p = value.split(',').map(clean);
-        if (p.length !== 7) { warnings.push(warning('Quét Mã', '', value, `${ws.name || 'Sheet'} dòng ${r.rowNo}: cần đúng 7 trường`, file)); continue; }
+        if (p.length !== 7) {
+          warnings.push(warning('Quét Mã', canonicalProject(p[0]), p[1] || value, `${ws.name || 'Sheet'} dòng ${r.rowNo}: cần đúng 7 trường; vẫn giữ dòng Quét Mã trong file gốc để kiểm tra`, file));
+          details.push({
+            projectCode:canonicalProject(p[0]), drawingCode:p[1] || value,
+            quantity:number(p[2]), manufacturer:p[3] || '', receiptCode:p[4] || '',
+            warehouseDate:parseDmyDate(p[5]), reference:p.slice(6).join(','),
+            scanDate:currentScanMarker?.display || '', scanDateSort:currentScanMarker?.sort || '',
+            manualReview:true, invalidFormat:true, mergedRowCount:1, note:'Không đúng 7 trường',
+            sourceFile:basename(sourceName || file), sourceSheet:ws.name || '', sourceRow:r.rowNo
+          });
+          continue;
+        }
         let quantity, manufacturer, manualReview = false;
         const p3num = /^\d+$/.test(p[2]), p4num = /^\d+$/.test(p[3]);
         if (p3num && !p4num) { quantity = number(p[2]); manufacturer = p[3]; }
@@ -231,7 +244,7 @@ async function processScans(files) {
     if (!hasSheet) throw new Error(`File ${basename(sourceName || file)} không có sheet dữ liệu.`);
   }
   const rows = [...groups.values()];
-  ensureTotals('Quét Mã', details, rows, ['quantity']);
+  ensureTotals('Quét Mã', details.filter(row => !row.invalidFormat), rows, ['quantity']);
   return { rows, details, warnings };
 }
 
@@ -256,12 +269,11 @@ async function processWarehouse(files) {
           continue;
         }
         const row = Object.fromEntries(Object.entries(cols).map(([k, names]) => [k, cellValue(getBy(map, r.values, names))]));
-        if (!clean(row.projectName) && !clean(row.itemCode)) continue;
+        if (!clean(row.itemCode)) continue;
         row.projectName = clean(row.projectName); row.itemCode = clean(row.itemCode); row.itemName = clean(row.itemName); row.supplier = clean(row.supplier); row.poNumber = clean(row.poNumber);
         row.projectCode = projectCode(row.projectName);
         if (!row.projectCode) {
-          warnings.push(warning('Nhập Kho', '', row.projectName || row.itemCode, `${ws.name || 'Sheet'} dòng ${r.rowNo}: bỏ qua vì Tên dự án không chứa mã MEC... hoặc AUT...`, file));
-          continue;
+          warnings.push(warning('Nhập Kho', '', row.projectName || row.itemCode, `${ws.name || 'Sheet'} dòng ${r.rowNo}: không trích xuất được mã dự án MEC... hoặc AUT...; vẫn giữ dòng Nhập Kho trong file gốc để kiểm tra`, file));
         }
         row.orderedQuantity = number(row.orderedQuantity); row.receivedQuantity = number(row.receivedQuantity);
         row.dueDate = parseDmyDate(row.dueDate); row.deliveryDate = parseDmyDate(row.deliveryDate);
@@ -271,7 +283,7 @@ async function processWarehouse(files) {
     if (!hasSheet) throw new Error(`File ${basename(sourceName || file)} không có sheet dữ liệu.`);
     if (!foundHeader) throw new Error(`${basename(sourceName || file)}: không tìm thấy đủ các cột Nhập Kho trong 30 dòng đầu của bất kỳ sheet nào.`);
   }
-  const rows = mergeWarehouseRows(out);
+  const rows = mergeWarehouseRows(out.filter(row => row.projectCode));
   return { rows, details: out.map(row => ({ ...row, mergedRowCount: 1, note: '' })), warnings };
 }
 
@@ -298,12 +310,13 @@ async function processWorkshop(files) {
         const purchaseRequest = clean(r.values[3]);
         const itemCode = clean(r.values[4]);
         const itemName = clean(r.values[5]);
-        if (!itemCode && !purchaseRequest && !poNumber) continue;
-        if (!/_GC$/i.test(itemCode)) continue;
+        // A workshop row is identified by its item code. XGC reports can contain
+        // both normal codes and codes ending in _GC; the suffix only affects
+        // comparison matching and must not decide whether the source row exists.
+        if (!itemCode) continue;
         const extractedProject = projectCode(purchaseRequest) || projectCode(poNumber);
         if (!extractedProject) {
-          warnings.push(warning('Xưởng Gia Công', '', itemCode, `${ws.name || 'Sheet'} dòng ${r.rowNo}: bỏ qua vì MKS/PO không chứa mã MEC... hoặc AUT...`, file));
-          continue;
+          warnings.push(warning('Xưởng Gia Công', '', itemCode, `${ws.name || 'Sheet'} dòng ${r.rowNo}: không trích xuất được mã dự án MEC... hoặc AUT...; vẫn giữ dòng XGC để kiểm tra`, file));
         }
         out.push({
           projectCode:extractedProject,
@@ -328,7 +341,7 @@ async function processWorkshop(files) {
     if (!hasSheet) throw new Error(`File ${basename(sourceName || file)} không có sheet dữ liệu.`);
     if (!foundHeader) throw new Error(`${basename(sourceName || file)}: không tìm thấy hàng tiêu đề Xưởng Gia Công gồm STT, MKS, Mã hàng và Tên hàng trong 30 dòng đầu.`);
   }
-  const rows = mergeWorkshopRows(out);
+  const rows = mergeWorkshopRows(out.filter(row => row.projectCode));
   return { rows, details:out.map(row => ({ ...row, mergedRowCount:1, note:'' })), warnings };
 }
 

@@ -5,7 +5,7 @@ const path = require('path');
 const os = require('os');
 const ExcelJS = require('exceljs');
 const { Worker } = require('worker_threads');
-const { processFiles, parseUsDate, parseDmyDate, parseScanMarker, projectCode, buildComparison, resolveReview, validateProjectCodes, filterPurchasesByProjectPrefix, prioritizeProjectWarnings, mergePurchaseRows, mergeWarehouseRows, quantityComparisonNote } = require('../src/processor');
+const { processFiles, listWorkbookSheets, parseUsDate, parseDmyDate, parseScanMarker, projectCode, buildComparison, resolveReview, validateProjectCodes, filterPurchasesByProjectPrefix, prioritizeProjectWarnings, mergePurchaseRows, mergeWarehouseRows, quantityComparisonNote } = require('../src/processor');
 
 function processWithWorker(kind, file, sheets) {
   return new Promise((resolve, reject) => {
@@ -36,7 +36,24 @@ test('extracts MEC/AUT project codes from purchase order text', () => {
   assert.equal(projectCode('PR-0001'), '');
 });
 
-test('reads XGC workshop mapping and matches the _GC item code during comparison', async t => {
+test('keeps malformed scan data in the raw view without using it for comparison totals', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'scan-raw-warning-'));
+  t.after(() => fs.rm(dir, { recursive:true, force:true }));
+  const file = path.join(dir, 'scan.xlsx');
+  const wb = new ExcelJS.Workbook(); const ws = wb.addWorksheet('Data');
+  ws.addRow(['15/Aug']);
+  ws.addRow(['AUTM260552, VALID-01, 2, PMA, NK-1, 20/05/2026, REF']);
+  ws.addRow(['AUTM260552, INVALID-01, 3']);
+  await wb.xlsx.writeFile(file);
+  const result = await processWithWorker('scan', file);
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.details.length, 2);
+  assert.equal(result.details.find(row => row.drawingCode === 'INVALID-01').invalidFormat, true);
+  assert.equal(result.warnings.length, 1);
+  assert.match(result.warnings[0].note, /vẫn giữ dòng Quét Mã trong file gốc để kiểm tra/);
+});
+
+test('reads every XGC source row with an item code and matches the _GC item code during comparison', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'workshop-xgc-'));
   t.after(() => fs.rm(dir, { recursive:true, force:true }));
   const file = path.join(dir, 'Xgc2508.xlsx');
@@ -45,12 +62,19 @@ test('reads XGC workshop mapping and matches the _GC item code during comparison
   for (let row = 1; row <= 5; row++) sheet.addRow([]);
   sheet.addRow(['Trễ hạn (ngày)','Số lượng chưa sản xuất','STT','MKS','Mã hàng','Tên hàng','ĐVT','Số','Ngày','Số lượng','Ngày','Số lượng']);
   sheet.addRow([0,'IO-MEC2408011-04-260105',new Date(Date.UTC(2026,0,5)),'AGV-MEC2408011-11-251230','PM111014-D_GC','Stop Ring','PCS',2,new Date(Date.UTC(2026,1,7)),1,new Date(Date.UTC(2026,1,4)),1]);
-  sheet.addRow([0,'IO-MEC2408011-04-260105',new Date(Date.UTC(2026,0,5)),'AGV-MEC2408011-11-251230','NOT-WORKSHOP','Bỏ qua','PCS',99,new Date(Date.UTC(2026,1,7)),99,new Date(Date.UTC(2026,1,4)),0]);
+  sheet.addRow([0,'IO-MEC2408011-05-260105',new Date(Date.UTC(2026,0,5)),'AGV-MEC2408011-12-251230','NOT-WORKSHOP','Không có hậu tố GC','PCS',3,new Date(Date.UTC(2026,1,7)),2,new Date(Date.UTC(2026,1,4)),1]);
+  sheet.addRow([0,'IO-SALE-01',new Date(Date.UTC(2026,0,5)),'SALES-01','NO-PROJECT_GC','Không có mã dự án','PCS',4,new Date(Date.UTC(2026,1,7)),1,new Date(Date.UTC(2026,1,4)),3]);
+  sheet.addRow([0,'Người lập','','','','','','','','','','']);
   await workbook.xlsx.writeFile(file);
 
   const result = await processWithWorker('workshop', file);
-  assert.equal(result.rows.length, 1);
-  assert.equal(result.details.length, 1);
+  assert.equal(result.rows.length, 2);
+  assert.equal(result.details.length, 3);
+  assert.equal(result.details.some(row => row.itemCode === 'NOT-WORKSHOP'), true);
+  assert.equal(result.details.some(row => row.itemCode === 'NO-PROJECT_GC' && row.projectCode === ''), true);
+  assert.equal(result.details.some(row => row.poNumber === 'Người lập'), false);
+  assert.equal(result.warnings.length, 1);
+  assert.match(result.warnings[0].note, /vẫn giữ dòng XGC để kiểm tra/);
   assert.deepEqual({
     projectCode:result.rows[0].projectCode,
     purchaseRequest:result.rows[0].purchaseRequest,
@@ -86,6 +110,22 @@ test('reads XGC workshop mapping and matches the _GC item code during comparison
   assert.equal(compared.comparison[0].purchaseQuantity, 2);
   assert.equal(compared.comparison[0].warehouseQuantity, 1);
   assert.equal(compared.comparison[0].poNumber, 'IO-MEC2408011-04-260105');
+
+  const comparedWithoutSuffix = buildComparison(
+    [{ projectCode:'MEC2408011', itemCode:'NOT-WORKSHOP', quantity:3 }],
+    [{ projectCode:'MEC2408011', drawingCode:'NOT-WORKSHOP', quantity:3 }],
+    result.rows,
+    100,
+    new Map(),
+    99
+  );
+  const plainCodeRow = comparedWithoutSuffix.comparison[0];
+  assert.equal(plainCodeRow.purchaseMatchedCode, 'NOT-WORKSHOP');
+  assert.equal(plainCodeRow.warehouseMatchedCode, 'NOT-WORKSHOP');
+  assert.equal(plainCodeRow.purchaseQuantity, 3);
+  assert.equal(plainCodeRow.scanQuantity, 3);
+  assert.equal(plainCodeRow.warehouseQuantity, 2);
+  assert.equal(plainCodeRow.receiptSource, 'Xưởng Gia Công');
 });
 
 test('uses purchase quantity as baseline and describes each warehouse supplier', () => {
@@ -600,13 +640,25 @@ test('isolated Excel parsers run sequentially', async t => {
   ws.addRow(['','C-01','Tên hàng thiếu dự án','NCC','PO-003',1,'01/08/2026','02/08/2026',1]);
   await wb.xlsx.writeFile(file);
   const result = await processWithWorker('warehouse', file);
-  assert.equal(result.details.length, 2);
+  assert.equal(result.details.length, 4);
   assert.equal(result.rows.length, 1);
   assert.equal(result.rows[0].orderedQuantity, 3);
   assert.equal(result.rows[0].poNumber, 'PO-001');
   assert.equal(result.rows[0].note, 'Gộp 2 dòng');
   assert.equal(result.warnings.length, 2);
-  assert.match(result.warnings[0].note, /bỏ qua/);
+  assert.match(result.warnings[0].note, /vẫn giữ dòng Nhập Kho trong file gốc để kiểm tra/);
+ });
+
+ await t.test('sheet picker counts rows containing values instead of the formatted Excel range', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sheet-count-'));
+  t.after(() => fs.rm(dir, { recursive:true, force:true }));
+  const file = path.join(dir, 'formatted-range.xlsx');
+  const wb = new ExcelJS.Workbook(); const ws = wb.addWorksheet('Data');
+  ws.addRow(['Mã hàng']);
+  ws.addRow(['ITEM-01']);
+  ws.getCell('A1048576').font = { bold:true };
+  await wb.xlsx.writeFile(file);
+  assert.deepEqual(await listWorkbookSheets(file), [{ name:'Data', rowCount:2 }]);
  });
 
  await t.test('reads the real purchase layout with Maker as the item-name column', async t => {
