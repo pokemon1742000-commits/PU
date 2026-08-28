@@ -273,6 +273,9 @@ select {
 .info-footer { display: flex; justify-content: flex-end; margin-top: 16px; }
 
 .self-check-card { max-width: 920px; }
+.database-section-heading { margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+.database-section-heading h3, .database-section-heading p { margin: 0; }
+.database-section-heading p { margin-top: 7px; color: var(--muted); line-height: 1.5; }
 .self-check-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .self-check-heading h3, .self-check-heading p { margin: 0; }
 .self-check-heading p { margin-top: 7px; color: var(--muted); line-height: 1.5; }

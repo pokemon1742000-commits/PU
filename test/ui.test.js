@@ -265,14 +265,15 @@ test('sidebar opens a dedicated page for project-scoped old-to-new code links', 
 
 test('sidebar exposes database management and keeps the protected delete action reachable', () => {
   assert.match(html, /data-view="settings"[\s\S]*Quản lý cơ sở dữ liệu/);
-  assert.match(html, /id="settings" class="view"[\s\S]*id="deleteDatabase"/);
+  assert.match(html, /id="settings" class="view"[\s\S]*id="runDataAudit"[\s\S]*id="deleteDatabase"/);
   assert.match(js, /deleteDatabase'\)\.onclick=\(\)=>startDelete\(\)/);
   assert.match(js, /deleteStep=1/);
 });
 
 test('application exposes actual-data audit and a separate non-destructive technical check', () => {
-  assert.match(html, /id="selfCheckNav"[\s\S]*Kiểm tra dữ liệu khớp/);
-  assert.match(html, /id="selfCheck" class="view"[\s\S]*id="runDataAudit"[\s\S]*id="auditBody"[\s\S]*id="runSelfCheck"/);
+  assert.doesNotMatch(html, /id="selfCheckNav"/);
+  assert.doesNotMatch(html, /id="selfCheck" class="view"/);
+  assert.match(html, /id="settings" class="view"[\s\S]*Kiểm tra dữ liệu có khớp hay không[\s\S]*id="runDataAudit"[\s\S]*id="auditBody"[\s\S]*id="runSelfCheck"/);
   assert.match(preload, /runDataAudit:.*data-audit:run/);
   assert.match(preload, /searchLoadedCode:.*data-audit:search/);
   assert.match(main, /ipcMain\.handle\('data-audit:run'/);
