@@ -85,10 +85,11 @@ test('comparison export only notes PU Check when a purchase PR has no warehouse 
     '', 'Kho', 'NCC A', 'PU check', 'NCC B', '', 'PU check', 'PU check'
   ]);
   assert.deepEqual([10, 11, 12, 13, 14, 15, 16, 17].map(row => sheet.getCell(`K${row}`).value), [
-    'OK', 'Chưa bắn code', 'Chưa về', 'Chưa về', 'Chưa về đủ', 'OK', 'Check lại', 'Check lại'
+    'OK', 'Chưa bắn code', 'Chưa về', 'Check lại', 'Chưa về đủ', 'OK', 'Check lại', 'Check lại'
   ]);
   for (let row = 10; row <= 17; row++) assert.equal(sheet.getCell(`K${row}`).dataValidation.type, 'list');
   assert.deepEqual([sheet.getCell('N12').value, sheet.getCell('O12').value], ['PO-01','25/08/2026']);
+  assert.deepEqual([sheet.getCell('N14').value, sheet.getCell('O14').value], ['PO-02','26/08/2026']);
   assert.deepEqual([
     sheet.getCell('N10').value || '', sheet.getCell('O10').value || '',
     sheet.getCell('N11').value || '', sheet.getCell('O11').value || '',
