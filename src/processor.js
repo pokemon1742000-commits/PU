@@ -645,18 +645,20 @@ function candidateOptions(target, rows, field) {
 
 function withoutGcSuffix(value) {
   const code = norm(value);
-  return code.endsWith('_GC') ? code.slice(0, -3) : code;
+  if (!code) return '';
+  return code.replace(/_GC$/i, '').replace(/\(\d+\)$/i, '').trim();
 }
 
 function gcSuffixMatch(target, rows, field) {
   const drawingCode = norm(target);
-  const drawingHasSuffix = drawingCode.endsWith('_GC');
   const drawingBase = withoutGcSuffix(drawingCode);
   if (!drawingBase) return null;
+  const drawingHasVariantSuffix = /(?:_GC|\(\d+\))$/i.test(drawingCode);
   return rows.find(row => {
     const sourceCode = norm(row[field]);
-    return sourceCode !== drawingCode
-      && (drawingHasSuffix || sourceCode.endsWith('_GC'))
+    if (sourceCode === drawingCode) return false;
+    const sourceHasVariantSuffix = /(?:_GC|\(\d+\))$/i.test(sourceCode);
+    return (drawingHasVariantSuffix || sourceHasVariantSuffix)
       && withoutGcSuffix(sourceCode) === drawingBase;
   }) || null;
 }

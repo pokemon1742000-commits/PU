@@ -315,6 +315,18 @@ test('automatically matches item codes that only differ by the _GC suffix', () =
   assert.match(result.comparison[0].matchStatus, /100%/);
 });
 
+test('automatically matches receipt variants that differ by _GC or a numeric suffix', () => {
+  const purchases = [{ projectCode:'AUTM260552', itemCode:'2512028-FR2-002', quantity:1 }];
+  const scans = [{ projectCode:'AUTM260552', drawingCode:'2512028-FR2-002_GC', quantity:1 }];
+  const warehouse = [{ projectCode:'AUTM260552', itemCode:'2512028-FR2-002(1)', receivedQuantity:1 }];
+  const result = buildComparison(purchases, scans, warehouse, 100, new Map(), 99);
+  assert.equal(result.review.length, 0);
+  assert.equal(result.comparison[0].purchaseQuantity, 1);
+  assert.equal(result.comparison[0].warehouseQuantity, 1);
+  assert.equal(result.comparison[0].scanQuantity, 1);
+  assert.match(result.comparison[0].matchStatus, /100%/);
+});
+
 test('does not use the _GC shortcut when characters before the suffix differ', () => {
   const purchases = [{ projectCode:'AUTM260552', itemCode:'2208022-TO-999', quantity:2 }];
   const scans = [{ projectCode:'AUTM260552', drawingCode:'2208022-TO-033_GC', quantity:2 }];
