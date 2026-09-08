@@ -107,15 +107,17 @@ function registerIpc() {
     return summary();
   });
   ipcMain.handle('purchase-replacement:save', async (_e, payload) => {
-    const projectCode = String(payload?.projectCode || '').trim().toUpperCase();
+    const projectCodes = [...new Set(String(payload?.projectCode || '').split(',').map(value => value.trim().toUpperCase()).filter(Boolean))];
     const oldCode = String(payload?.oldCode || '').trim().toUpperCase();
     const newCode = String(payload?.newCode || '').trim().toUpperCase();
-    if (!projectCode || !oldCode || !newCode) throw new Error('Cần nhập đủ mã dự án, mã cũ và mã mới.');
+    if (!projectCodes.length || !oldCode || !newCode) throw new Error('Cần nhập đủ mã dự án, mã cũ và mã mới.');
     if (oldCode === newCode) throw new Error('Mã mới phải khác mã cũ.');
-    const projectRows = session.purchase.filter(row => String(row.projectCode || '').trim().toUpperCase() === projectCode);
-    if (!projectRows.some(row => String(row.itemCode || '').trim().toUpperCase() === oldCode)) throw new Error(`Không tìm thấy mã cũ ${oldCode} trong dự án ${projectCode}.`);
-    if (!projectRows.some(row => String(row.itemCode || '').trim().toUpperCase() === newCode)) throw new Error(`Không tìm thấy PR của mã mới ${newCode} trong dự án ${projectCode}.`);
-    session.purchaseReplacements = await database.savePurchaseReplacement(projectCode, oldCode, newCode);
+    for (const projectCode of projectCodes) {
+      const projectRows = session.purchase.filter(row => String(row.projectCode || '').trim().toUpperCase() === projectCode);
+      if (!projectRows.some(row => String(row.itemCode || '').trim().toUpperCase() === oldCode)) throw new Error(`Không tìm thấy mã cũ ${oldCode} trong dự án ${projectCode}.`);
+      if (!projectRows.some(row => String(row.itemCode || '').trim().toUpperCase() === newCode)) throw new Error(`Không tìm thấy PR của mã mới ${newCode} trong dự án ${projectCode}.`);
+    }
+    for (const projectCode of projectCodes) session.purchaseReplacements = await database.savePurchaseReplacement(projectCode, oldCode, newCode);
     autoCompareWhenReady();
     return summary();
   });

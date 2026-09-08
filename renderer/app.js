@@ -233,11 +233,12 @@ async function saveCodeReplacement(event){
   const payload={projectCode:$('#replacementProject').value,oldCode:$('#replacementOldCode').value,newCode:$('#replacementNewCode').value};
   await run(async()=>{
     const result=await window.api.savePurchaseReplacement(payload);
-    const index=(result.purchaseReplacements||[]).findIndex(row=>row.projectCode===payload.projectCode.trim().toUpperCase()&&row.oldCode===payload.oldCode.trim().toUpperCase());
+    const projectCodes=[...new Set(payload.projectCode.split(',').map(value=>value.trim().toUpperCase()).filter(Boolean))];
+    const index=(result.purchaseReplacements||[]).findIndex(row=>projectCodes.includes(row.projectCode)&&row.oldCode===payload.oldCode.trim().toUpperCase());
     if(index>=0)replacementPage=Math.floor(index/REPLACEMENT_PAGE_SIZE)+1;
     await refresh(result);
     event.target.reset();
-  },`Đã liên kết ${payload.oldCode} → ${payload.newCode}`);
+  },`Đã liên kết ${payload.oldCode} → ${payload.newCode} cho ${payload.projectCode}`);
 }
 async function removeCodeReplacement(projectCode,oldCode){
   if(!confirm(`Xóa liên kết đổi mã ${oldCode} trong dự án ${projectCode}?`))return;

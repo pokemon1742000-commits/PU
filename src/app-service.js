@@ -106,15 +106,17 @@ class AppService {
   }
 
   async savePurchaseReplacement(payload) {
-    const projectCode = String(payload?.projectCode || '').trim().toUpperCase();
+      const projectCodes = [...new Set(String(payload?.projectCode || '').split(',').map(value => value.trim().toUpperCase()).filter(Boolean))];
     const oldCode = String(payload?.oldCode || '').trim().toUpperCase();
     const newCode = String(payload?.newCode || '').trim().toUpperCase();
-    if (!projectCode || !oldCode || !newCode) throw new Error('Cáº§n nháº­p Ä‘á»§ mÃ£ dá»± Ã¡n, mÃ£ cÅ© vÃ  mÃ£ má»›i.');
+      if (!projectCodes.length || !oldCode || !newCode) throw new Error('Cáº§n nháº­p Ä‘á»§ mÃ£ dá»± Ã¡n, mÃ£ cÅ© vÃ  mÃ£ má»›i.');
     if (oldCode === newCode) throw new Error('MÃ£ má»›i pháº£i khÃ¡c mÃ£ cÅ©.');
-    const projectRows = this.session.purchase.filter(row => String(row.projectCode || '').trim().toUpperCase() === projectCode);
-    if (!projectRows.some(row => String(row.itemCode || '').trim().toUpperCase() === oldCode)) throw new Error(`KhÃ´ng tÃ¬m tháº¥y mÃ£ cÅ© ${oldCode} trong dá»± Ã¡n ${projectCode}.`);
-    if (!projectRows.some(row => String(row.itemCode || '').trim().toUpperCase() === newCode)) throw new Error(`KhÃ´ng tÃ¬m tháº¥y PR cá»§a mÃ£ má»›i ${newCode} trong dá»± Ã¡n ${projectCode}.`);
-    this.session.purchaseReplacements = await this.database.savePurchaseReplacement(projectCode, oldCode, newCode);
+      for (const projectCode of projectCodes) {
+        const projectRows = this.session.purchase.filter(row => String(row.projectCode || '').trim().toUpperCase() === projectCode);
+        if (!projectRows.some(row => String(row.itemCode || '').trim().toUpperCase() === oldCode)) throw new Error(`KhÃ´ng tÃ¬m tháº¥y mÃ£ cÅ© ${oldCode} trong dá»± Ã¡n ${projectCode}.`);
+        if (!projectRows.some(row => String(row.itemCode || '').trim().toUpperCase() === newCode)) throw new Error(`KhÃ´ng tÃ¬m tháº¥y PR cá»§a mÃ£ má»›i ${newCode} trong dá»± Ã¡n ${projectCode}.`);
+      }
+      for (const projectCode of projectCodes) this.session.purchaseReplacements = await this.database.savePurchaseReplacement(projectCode, oldCode, newCode);
     this.autoCompareWhenReady();
     return this.summary();
   }
