@@ -180,8 +180,14 @@ function parseDmyDate(s) {
     if (monthIndex >= 0) return formatValidated(namedMonth[3], monthIndex + 1, namedMonth[1]);
   }
   const dmy = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (!dmy) return text;
-  return formatValidated(dmy[3], dmy[2], dmy[1]);
+  if (dmy) {
+    const first = Number(dmy[1]);
+    const second = Number(dmy[2]);
+    if (first > 12 && second <= 12) return formatValidated(dmy[3], second, first);
+    if (second > 12 && first <= 12) return formatValidated(dmy[3], first, second);
+    return formatValidated(dmy[3], dmy[2], dmy[1]);
+  }
+  return text;
 }
 
 async function processScans(files) {
@@ -205,9 +211,14 @@ async function processScans(files) {
       let firstMarkerSeen = false;
       const pendingBeforeFirstMarker = [];
       for await (const excelRow of worksheetRows(ws)) {
-        const r = rowData(excelRow), rawValue = r.values[0], value = clean(rawValue);
+        const r = rowData(excelRow);
+        let rowCells = r.values.map(cellValue).map(clean);
+        while (rowCells.length && clean(rowCells[0]) === '') rowCells.shift();
+        while (rowCells.length && clean(rowCells[rowCells.length - 1]) === '') rowCells.pop();
+        const value = rowCells.join(',');
         if (!value) continue;
-        const markerDate = value.includes(',') ? null : parseScanMarker(rawValue);
+
+        const markerDate = rowCells.length === 1 && !value.includes(',') ? parseScanMarker(rowCells[0]) : null;
         if (markerDate) {
           if (!firstMarkerSeen) {
             pendingBeforeFirstMarker.forEach(row => addParsed({ ...row, scanDate: `Trước ${markerDate.display}`, scanDateSort: '' }));
@@ -217,13 +228,22 @@ async function processScans(files) {
           currentScanMarker = markerDate;
           continue;
         }
-        const p = value.split(',').map(clean);
-        if (p.length !== 7) {
-          warnings.push(warning('Quét Mã', canonicalProject(p[0]), p[1] || value, `${ws.name || 'Sheet'} dòng ${r.rowNo}: cần đúng 7 trường; vẫn giữ dòng Quét Mã trong file gốc để kiểm tra`, file));
+
+        let normalized = rowCells.length > 1 ? [...rowCells] : value.split(',').map(clean);
+        if (normalized.length === 5) {
+          normalized = [normalized[0], normalized[1], normalized[2], normalized[3], '', normalized[4], ''];
+        } else if (normalized.length === 6) {
+          normalized = [normalized[0], normalized[1], normalized[2], normalized[3], '', normalized[4], normalized[5]];
+        } else if (normalized.length > 7) {
+          normalized = [normalized[0], normalized[1], normalized[2], normalized[3], normalized[4], normalized[5], normalized.slice(6).join(',')];
+        }
+        if (normalized.length !== 7) {
+          const fallback = normalized.length ? normalized : [value];
+          warnings.push(warning('Quét Mã', canonicalProject(fallback[0] || ''), fallback[1] || value, `${ws.name || 'Sheet'} dòng ${r.rowNo}: cần đúng 7 trường; vẫn giữ dòng Quét Mã trong file gốc để kiểm tra`, file));
           details.push({
-            projectCode:canonicalProject(p[0]), drawingCode:p[1] || value,
-            quantity:number(p[2]), manufacturer:p[3] || '', receiptCode:p[4] || '',
-            warehouseDate:parseDmyDate(p[5]), reference:p.slice(6).join(','),
+            projectCode:canonicalProject(fallback[0]), drawingCode:fallback[1] || value,
+            quantity:number(fallback[2]), manufacturer:fallback[3] || '', receiptCode:fallback[4] || '',
+            warehouseDate:parseDmyDate(fallback[5]), reference:fallback.slice(6).join(','),
             scanDate:currentScanMarker?.display || '', scanDateSort:currentScanMarker?.sort || '',
             manualReview:true, invalidFormat:true, mergedRowCount:1, note:'Không đúng 7 trường',
             sourceFile:basename(sourceName || file), sourceSheet:ws.name || '', sourceRow:r.rowNo
@@ -231,11 +251,11 @@ async function processScans(files) {
           continue;
         }
         let quantity, manufacturer, manualReview = false;
-        const p3num = /^\d+$/.test(p[2]), p4num = /^\d+$/.test(p[3]);
-        if (p3num && !p4num) { quantity = number(p[2]); manufacturer = p[3]; }
-        else if (!p3num && p4num) { quantity = number(p[3]); manufacturer = p[2]; }
-        else { quantity = number(p[2]); manufacturer = p[3]; manualReview = true; warnings.push(warning('Quét Mã', p[0], p[1], `${ws.name || 'Sheet'} dòng ${r.rowNo}: không xác định được thứ tự số lượng/NXS`, file)); }
-        const parsed = { projectCode: canonicalProject(p[0]), drawingCode: p[1], quantity, manufacturer, receiptCode: p[4], warehouseDate: parseDmyDate(p[5]), reference: p[6], scanDate: currentScanMarker?.display || '', scanDateSort: currentScanMarker?.sort || '', manualReview, sourceFile: basename(sourceName || file), sourceSheet: ws.name || '', sourceRow: r.rowNo };
+        const p3num = /^\d+$/.test(normalized[2]), p4num = /^\d+$/.test(normalized[3]);
+        if (p3num && !p4num) { quantity = number(normalized[2]); manufacturer = normalized[3]; }
+        else if (!p3num && p4num) { quantity = number(normalized[3]); manufacturer = normalized[2]; }
+        else { quantity = number(normalized[2]); manufacturer = normalized[3]; manualReview = true; warnings.push(warning('Quét Mã', normalized[0], normalized[1], `${ws.name || 'Sheet'} dòng ${r.rowNo}: không xác định được thứ tự số lượng/NXS`, file)); }
+        const parsed = { projectCode: canonicalProject(normalized[0]), drawingCode: normalized[1], quantity, manufacturer, receiptCode: normalized[4], warehouseDate: parseDmyDate(normalized[5]), reference: normalized[6], scanDate: currentScanMarker?.display || '', scanDateSort: currentScanMarker?.sort || '', manualReview, sourceFile: basename(sourceName || file), sourceSheet: ws.name || '', sourceRow: r.rowNo };
         if (!firstMarkerSeen) pendingBeforeFirstMarker.push(parsed);
         else addParsed(parsed);
       }

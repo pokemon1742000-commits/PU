@@ -26,6 +26,7 @@ test('parses scan marker and normalizes warehouse dates as DD/MM/YYYY', () => {
   assert.equal(parseDmyDate('09/Jul/2026'), '09/07/2026');
   assert.equal(parseDmyDate('06/Aug/2026'), '06/08/2026');
   assert.equal(parseDmyDate('04/08/2026'), '04/08/2026');
+  assert.equal(parseDmyDate('08/21/2027'), '21/08/2027');
   assert.equal(parseDmyDate(new Date(Date.UTC(2026, 4, 20))), '20/05/2026');
 });
 
@@ -36,21 +37,63 @@ test('extracts MEC/AUT project codes from purchase order text', () => {
   assert.equal(projectCode('PR-0001'), '');
 });
 
-test('keeps malformed scan data in the raw view without using it for comparison totals', async t => {
+test('accepts valid six-field scan rows where the receipt code is blank and keeps malformed rows flagged', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'scan-raw-warning-'));
   t.after(() => fs.rm(dir, { recursive:true, force:true }));
   const file = path.join(dir, 'scan.xlsx');
   const wb = new ExcelJS.Workbook(); const ws = wb.addWorksheet('Data');
   ws.addRow(['15/Aug']);
   ws.addRow(['AUTM260552, VALID-01, 2, PMA, NK-1, 20/05/2026, REF']);
+  ws.addRow(['AUTM260552, VALID-02, 2, PMA, 20/05/2026, REF']);
   ws.addRow(['AUTM260552, INVALID-01, 3']);
   await wb.xlsx.writeFile(file);
   const result = await processWithWorker('scan', file);
-  assert.equal(result.rows.length, 1);
-  assert.equal(result.details.length, 2);
+  assert.equal(result.rows.length, 2);
+  assert.equal(result.details.length, 3);
+  assert.equal(result.details.find(row => row.drawingCode === 'VALID-02').receiptCode, '');
   assert.equal(result.details.find(row => row.drawingCode === 'INVALID-01').invalidFormat, true);
   assert.equal(result.warnings.length, 1);
   assert.match(result.warnings[0].note, /vẫn giữ dòng Quét Mã trong file gốc để kiểm tra/);
+});
+
+test('accepts scan rows stored across seven Excel columns without a comma-delimited cell', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'scan-multi-column-'));
+  t.after(() => fs.rm(dir, { recursive:true, force:true }));
+  const file = path.join(dir, 'scan.xlsx');
+  const wb = new ExcelJS.Workbook(); const ws = wb.addWorksheet('Data');
+  ws.addRow(['15/Aug']);
+  ws.addRow(['AUTM260579', 'E2B-M18KN16-WP-C1-2M', 2, 'tien thanh', '', '21/08/2027', 'AU']);
+  await wb.xlsx.writeFile(file);
+  const result = await processWithWorker('scan', file);
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.details.length, 1);
+  assert.equal(result.rows[0].projectCode, 'AUTM260579');
+  assert.equal(result.rows[0].drawingCode, 'E2B-M18KN16-WP-C1-2M');
+  assert.equal(result.rows[0].quantity, 2);
+  assert.equal(result.rows[0].manufacturer, 'tien thanh');
+  assert.equal(result.rows[0].warehouseDate, '21/08/2027');
+  assert.equal(result.rows[0].reference, 'AU');
+  assert.equal(result.rows[0].invalidFormat, undefined);
+  assert.equal(result.warnings.length, 0);
+});
+
+test('accepts five-field scan rows that omit receipt code and reference but provide warehouse date', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'scan-five-field-'));
+  t.after(() => fs.rm(dir, { recursive:true, force:true }));
+  const file = path.join(dir, 'scan.xlsx');
+  const wb = new ExcelJS.Workbook(); const ws = wb.addWorksheet('Data');
+  ws.addRow(['15/Aug']);
+  ws.addRow(['AUTM260580', 'E2B-M18KN16-WP-C1-2M', 2, 'tien thanh', '08/21/2027']);
+  await wb.xlsx.writeFile(file);
+  const result = await processWithWorker('scan', file);
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].projectCode, 'AUTM260580');
+  assert.equal(result.rows[0].drawingCode, 'E2B-M18KN16-WP-C1-2M');
+  assert.equal(result.rows[0].quantity, 2);
+  assert.equal(result.rows[0].manufacturer, 'tien thanh');
+  assert.equal(result.rows[0].warehouseDate, '21/08/2027');
+  assert.equal(result.rows[0].reference, '');
+  assert.equal(result.warnings.length, 0);
 });
 
 test('reads every XGC source row with an item code and matches the _GC item code during comparison', async t => {
