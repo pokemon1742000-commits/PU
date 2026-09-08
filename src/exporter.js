@@ -103,7 +103,6 @@ function exportStatus(row) {
   const purchase = numeric(row.purchaseQuantity), scanned = numeric(row.scanQuantity), received = numeric(row.warehouseQuantity);
   if (purchase <= 1e-8 && (scanned > 1e-8 || received > 1e-8)) return 'Check lại';
   if (scanned >= purchase - 1e-8) return 'OK';
-  if (purchase > 1e-8 && received <= 1e-8 && row.hasReceiptRecord === false && row.warehouseOrderPlaced !== true) return 'Check lại';
   if (received <= 1e-8) return 'Chưa về';
   if (received < purchase - 1e-8) return 'Chưa về đủ';
   return 'Chưa bắn code';
