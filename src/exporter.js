@@ -1,6 +1,7 @@
 const ExcelJS = require('exceljs');
 
 const projectReportDefinition = ['STT','Mã dự án','Mã hàng','Tên hàng','Số lượng BOOM','Số liệu XK','Maker','Ngày bắn code','Ngày nhập kho','Số lượng nhập kho','Tình trạng','Note','Người Vận Hành','Mã PO','Hạn Giao Hàng','Note đổi mã','Đổi PR'];
+const sourceComparisonDefinition = ['STT','Mã dự án','Mã hàng','Tên hàng','Số lượng PR','Số lượng PO đặt','Số lượng PO đã về','Số lượng XGC đặt','Số lượng XGC đã nhập','Tổng PO + XGC','Chênh lệch','Kết luận','Ghi chú','Mã PR','Mã PO','Nguồn XGC'];
 const statusOptions = ['OK','Chưa về','Chưa về đủ','Đã về','Chưa bắn code','Check lại','Hủy','Tồn','Common'];
 
 async function exportWorkbook(file, _selected, session) {
@@ -21,6 +22,8 @@ function createWorkbook(session) {
   wb.created = new Date();
   const ws = wb.addWorksheet(safeWorksheetName(sheetName));
   formatProjectReportSheet(ws, rows);
+  const sourceSheet = wb.addWorksheet('PR vs PO + XGC');
+  formatSourceComparisonSheet(sourceSheet, buildSourceComparisonRows(session));
   return wb;
 }
 
@@ -88,6 +91,105 @@ function formatProjectReportSheet(ws, rows) {
   ws.views = [{ state:'frozen', xSplit:5, ySplit:9, topLeftCell:'F10', activeCell:'A10' }];
   ws.autoFilter = { from:'A9', to:`Q${Math.max(9, 9 + rows.length)}` };
   ws.pageSetup = { orientation:'landscape', fitToPage:true, fitToWidth:1, fitToHeight:0, paperSize:9 };
+}
+
+function formatSourceComparisonSheet(ws, rows) {
+  ws.mergeCells('A3:P4');
+  const title = ws.getCell('A3');
+  title.value = 'ĐỐI CHIẾU PR VỚI PO + XGC';
+  title.font = { name:'Times New Roman', size:20, bold:true };
+  title.alignment = { horizontal:'center', vertical:'middle' };
+  for (let row = 3; row <= 4; row++) for (let col = 1; col <= sourceComparisonDefinition.length; col++) {
+    const cell = ws.getRow(row).getCell(col);
+    cell.border = {
+      top: row === 3 ? { style:'thin' } : undefined,
+      bottom: row === 4 ? { style:'thin' } : undefined,
+      left: col === 1 ? { style:'thin' } : undefined,
+      right: col === sourceComparisonDefinition.length ? { style:'thin' } : undefined
+    };
+  }
+  ws.getRow(3).height = 22;
+  ws.getRow(4).height = 22;
+  const header = ws.getRow(9);
+  header.values = sourceComparisonDefinition;
+  header.height = 34.5;
+  header.font = { name:'Aptos Narrow', size:11, bold:true };
+  header.alignment = { horizontal:'center', vertical:'middle', wrapText:true };
+  for (let col = 1; col <= sourceComparisonDefinition.length; col++) header.getCell(col).fill = fill(col <= 4 ? 'FF92D050' : 'FFFFC000');
+  rows.forEach((row, index) => {
+    const output = ws.addRow([
+      index + 1, row.projectCode, row.itemCode, row.itemName,
+      row.prQuantity, row.poOrderedQuantity, row.poReceivedQuantity,
+      row.xgcOrderedQuantity, row.xgcReceivedQuantity, row.sourceQuantity,
+      row.difference, row.status, row.note, row.prCodes, row.poCodes, row.xgcCodes
+    ]);
+    output.font = { name:'Aptos Narrow', size:11 };
+    output.alignment = { vertical:'top' };
+    [1,2,5,6,7,8,9,10,11,12].forEach(col => output.getCell(col).alignment = { horizontal:'center', vertical:'middle', wrapText:true });
+    [3,4,13,14,15,16].forEach(col => output.getCell(col).alignment = { vertical:'top', wrapText:true });
+    output.getCell(12).fill = fill(row.status === 'Đủ' ? 'FF92D050' : row.status === 'Check lại' ? 'FFFFC000' : 'FFFFFF00');
+  });
+  [9,17,29,29,14,16,16,16,17,16,14,14,28,24,24,24].forEach((width, index) => { ws.getColumn(index + 1).width = width; });
+  [1,5,6,7,8,9,10,11].forEach(col => { ws.getColumn(col).numFmt = '0'; });
+  ws.views = [{ state:'frozen', xSplit:4, ySplit:9, topLeftCell:'E10', activeCell:'A10' }];
+  ws.autoFilter = { from:'A9', to:`P${Math.max(9, 9 + rows.length)}` };
+  ws.pageSetup = { orientation:'landscape', fitToPage:true, fitToWidth:1, fitToHeight:0, paperSize:9 };
+}
+
+function buildSourceComparisonRows(session) {
+  const groups = new Map();
+  const add = (sourceRows, source) => (sourceRows || []).forEach(row => {
+    const projectCode = String(row.projectCode || '').trim();
+    const itemCode = sourceCode(row.itemCode);
+    if (!projectCode || !itemCode) return;
+    const key = `${projectCode.toUpperCase()}|${itemCode}`;
+    const group = groups.get(key) || {
+      projectCode, itemCode, itemName:'', prQuantity:0, poOrderedQuantity:0, poReceivedQuantity:0,
+      xgcOrderedQuantity:0, xgcReceivedQuantity:0, prCodes:[], poCodes:[], xgcCodes:[], hasPr:false, hasSource:false
+    };
+    if (row.itemName && !group.itemName) group.itemName = row.itemName;
+    if (source === 'pr') {
+      group.hasPr = true;
+      group.prQuantity += numeric(row.quantity);
+      appendUnique(group.prCodes, row.purchaseOrder);
+    } else {
+      group.hasSource = true;
+      const ordered = numeric(row.orderedQuantity), received = numeric(row.receivedQuantity);
+      if (source === 'xgc') {
+        group.xgcOrderedQuantity += ordered;
+        group.xgcReceivedQuantity += received;
+        appendUnique(group.xgcCodes, row.itemCode);
+      } else {
+        group.poOrderedQuantity += ordered;
+        group.poReceivedQuantity += received;
+        appendUnique(group.poCodes, row.poNumber);
+      }
+    }
+    groups.set(key, group);
+  });
+  add(session.purchase, 'pr');
+  add(session.warehouse, 'po');
+  add(session.workshop, 'xgc');
+  return [...groups.values()].map(group => {
+    const sourceQuantity = group.poOrderedQuantity + group.xgcOrderedQuantity;
+    const difference = sourceQuantity - group.prQuantity;
+    let status, note;
+    if (!group.hasPr) { status = 'Check lại'; note = 'Có trong PO/XGC nhưng không có trong PR'; }
+    else if (!group.hasSource) { status = 'Chưa về'; note = 'Có trong PR nhưng chưa có trong PO và XGC'; }
+    else if (difference < -1e-8) { status = 'Thiếu'; note = `Thiếu ${Math.abs(difference)}`; }
+    else if (difference > 1e-8) { status = 'Thừa'; note = `Thừa ${difference}`; }
+    else { status = 'Đủ'; note = ''; }
+    return { ...group, sourceQuantity, difference, status, note, prCodes:group.prCodes.join('; '), poCodes:group.poCodes.join('; '), xgcCodes:group.xgcCodes.join('; ') };
+  });
+}
+
+function sourceCode(value) {
+  return String(value || '').trim().toUpperCase().replace(/_GC$/i, '');
+}
+
+function appendUnique(values, value) {
+  const text = String(value || '').trim();
+  if (text && !values.includes(text)) values.push(text);
 }
 
 function safeWorksheetName(value) {

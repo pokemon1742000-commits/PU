@@ -137,7 +137,7 @@ test('tables provide one centered numbered pagination above the data', () => {
   assert.match(css, /#data \.discrepancy-block \.table-wrap[\s\S]*max-height: none/);
 });
 
-test('Excel export is a single comparison reference sheet without confirmations', () => {
+test('Excel export contains the report sheet and PR versus PO/XGC sheet without confirmations', () => {
   assert.match(html, /class="header-actions"[\s\S]*id="infoBtn"[\s\S]*id="exportBtn"/);
   assert.doesNotMatch(html, /id="exportSettingsBtn"/);
   const topTabs = html.match(/<div class="tab-items">([\s\S]*?)<\/div><\/nav>/)?.[1] || '';
@@ -146,9 +146,9 @@ test('Excel export is a single comparison reference sheet without confirmations'
   assert.match(exporter, /const rows = session\.comparison \|\| \[\]/);
   assert.match(exporter, /const ws = wb\.addWorksheet/);
   assert.doesNotMatch(exporter, /session\.review|appendReviewSection/);
-  assert.match(html, /Xuất một sheet duy nhất theo định dạng file tham khảo/);
+  assert.match(html, /một file gồm sheet số liệu xuất kho và sheet đối chiếu PR với PO \+ XGC/);
   assert.match(js, /exportExcel\(\['comparison'\]\)/);
-  assert.match(js, /1 sheet dữ liệu đối chiếu/);
+  assert.match(js, /2 sheet dữ liệu đối chiếu/);
   assert.doesNotMatch(js, /sheetOptions input:checked/);
 });
 

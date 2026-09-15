@@ -15,7 +15,7 @@ const columns = {
   warnings:[['stt','STT'],['projectCode','Mã dự án'],['purchaseOrder','Số PR'],['itemCode','Mã hàng'],['itemName','Tên hàng'],['quantity','Số lượng'],['sourceFile','File nguồn'],['sourceRow','Dòng'],['note','Ghi chú']]
 };
 
-async function init(){ $('#sheetOptions').innerHTML='<div class="export-single-sheet"><strong>1 sheet dữ liệu đối chiếu</strong><span>Theo mẫu SỐ LIỆU XUẤT KHO, không kèm bảng xác nhận.</span></div>'; applyTheme(localStorage.getItem('theme')||'default'); bind(); await refresh(await window.api.getState()); requestAnimationFrame(updateNavIndicator); }
+async function init(){ $('#sheetOptions').innerHTML='<div class="export-single-sheet"><strong>2 sheet dữ liệu đối chiếu</strong><span>Gồm SỐ LIỆU XUẤT KHO và đối chiếu PR với PO + XGC.</span></div>'; applyTheme(localStorage.getItem('theme')||'default'); bind(); await refresh(await window.api.getState()); requestAnimationFrame(updateNavIndicator); }
 function bind(){
   $$('.nav').forEach(b=>b.onclick=async()=>{show(b.dataset.view,b);if(b.dataset.openTable)await showTable(b.dataset.openTable)});
   $$('.load').forEach(b=>b.onclick=()=>handleLoad(b));

@@ -21,7 +21,7 @@ test('comparison export follows the single-sheet template, excludes confirmation
   await exportWorkbook(file, ['purchase', 'comparison', 'review', 'shortage', 'excess'], session);
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile(file);
-  assert.deepEqual(workbook.worksheets.map(sheet => sheet.name), ['MEC001']);
+  assert.deepEqual(workbook.worksheets.map(sheet => sheet.name), ['MEC001', 'PR vs PO + XGC']);
   const sheet = workbook.getWorksheet('MEC001');
   assert.equal(sheet.getCell('A3').value, 'SỐ LIỆU XUẤT KHO');
   assert.deepEqual(sheet.getRow(9).values.slice(1), ['STT','Mã dự án','Mã hàng','Tên hàng','Số lượng BOOM','Số liệu XK','Maker','Ngày bắn code','Ngày nhập kho','Số lượng nhập kho','Tình trạng','Note','Người Vận Hành','Mã PO','Hạn Giao Hàng','Note đổi mã','Đổi PR']);
@@ -57,7 +57,7 @@ test('comparison export combines multiple scan projects into one sheet', async t
   await exportWorkbook(file, ['comparison'], session);
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile(file);
-  assert.deepEqual(workbook.worksheets.map(sheet => sheet.name), ['NHIỀU DỰ ÁN']);
+  assert.deepEqual(workbook.worksheets.map(sheet => sheet.name), ['NHIỀU DỰ ÁN', 'PR vs PO + XGC']);
   assert.equal(workbook.getWorksheet('NHIỀU DỰ ÁN').getCell('A10').value, 1);
   assert.equal(workbook.getWorksheet('NHIỀU DỰ ÁN').getCell('A11').value, 2);
 });
@@ -123,4 +123,37 @@ test('comparison export strikes an old linked code and shows the new code', asyn
   assert.equal(prNote.richText[0].text, 'PR-OLD');
   assert.equal(prNote.richText[0].font.strike, true);
   assert.equal(prNote.richText[1].text, ' → PR-NEW');
+});
+
+test('export adds a PR versus PO and XGC sheet with quantity and code checks', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'source-comparison-export-'));
+  t.after(() => fs.rm(dir, { recursive:true, force:true }));
+  const file = path.join(dir, 'source-comparison.xlsx');
+  await exportWorkbook(file, ['comparison'], {
+    comparison:[],
+    purchase:[
+      { projectCode:'MEC1', purchaseOrder:'PR-A', itemCode:'A', itemName:'A item', quantity:10 },
+      { projectCode:'MEC1', purchaseOrder:'PR-B', itemCode:'B', quantity:5 },
+      { projectCode:'MEC1', purchaseOrder:'PR-C', itemCode:'C', quantity:2 }
+    ],
+    warehouse:[
+      { projectCode:'MEC1', itemCode:'A', poNumber:'PO-A', orderedQuantity:8, receivedQuantity:7 },
+      { projectCode:'MEC1', itemCode:'C', poNumber:'PO-C', orderedQuantity:3, receivedQuantity:3 },
+      { projectCode:'MEC1', itemCode:'D', poNumber:'PO-D', orderedQuantity:4, receivedQuantity:4 }
+    ],
+    workshop:[
+      { projectCode:'MEC1', itemCode:'A_GC', poNumber:'XGC-A', orderedQuantity:2, receivedQuantity:2, sourceKind:'workshop' },
+      { projectCode:'MEC1', itemCode:'E_GC', poNumber:'XGC-E', orderedQuantity:1, receivedQuantity:1, sourceKind:'workshop' }
+    ]
+  });
+  const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile(file);
+  const sheet = workbook.getWorksheet('PR vs PO + XGC');
+  assert.deepEqual(sheet.getRow(9).values.slice(1), ['STT','Mã dự án','Mã hàng','Tên hàng','Số lượng PR','Số lượng PO đặt','Số lượng PO đã về','Số lượng XGC đặt','Số lượng XGC đã nhập','Tổng PO + XGC','Chênh lệch','Kết luận','Ghi chú','Mã PR','Mã PO','Nguồn XGC']);
+  const rows = new Map(sheet.getRows(10, sheet.rowCount - 9).map(row => [row.getCell(3).value, row.values.slice(1)]));
+  assert.deepEqual(rows.get('A').slice(9, 13), [10, 0, 'Đủ', '']);
+  assert.deepEqual(rows.get('B').slice(9, 13), [0, -5, 'Chưa về', 'Có trong PR nhưng chưa có trong PO và XGC']);
+  assert.deepEqual(rows.get('C').slice(9, 13), [3, 1, 'Thừa', 'Thừa 1']);
+  assert.deepEqual(rows.get('D').slice(9, 13), [4, 4, 'Check lại', 'Có trong PO/XGC nhưng không có trong PR']);
+  assert.deepEqual(rows.get('E').slice(9, 13), [1, 1, 'Check lại', 'Có trong PO/XGC nhưng không có trong PR']);
+  assert.equal(rows.get('A')[15], 'A_GC');
 });
