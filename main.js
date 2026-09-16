@@ -154,6 +154,15 @@ function registerIpc() {
     await exportWorkbook(result.filePath, sheetNames, session);
     return { canceled: false, path: result.filePath };
   });
+  ipcMain.handle('export:open', async (_e, filePath) => {
+    const target = String(filePath || '');
+    if (!target || path.extname(target).toLowerCase() !== '.xlsx') throw new Error('File xuất không hợp lệ.');
+    try { await fs.access(target); }
+    catch { throw new Error('Không tìm thấy file xuất.'); }
+    const error = await shell.openPath(target);
+    if (error) throw new Error(error);
+    return true;
+  });
 }
 
 async function load(kind, selections) {

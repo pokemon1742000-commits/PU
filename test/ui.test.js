@@ -152,6 +152,15 @@ test('Excel export contains the report sheet and PR versus PO/XGC sheet without 
   assert.doesNotMatch(js, /sheetOptions input:checked/);
 });
 
+test('export page offers opening the most recently exported file', () => {
+  assert.match(html, /id="openExportFileBtn"[^>]*hidden[^>]*>Mở file xuất/);
+  assert.match(preload, /openExportFile:.*export:open/);
+  assert.match(main, /ipcMain\.handle\('export:open'/);
+  assert.match(main, /shell\.openPath\(target\)/);
+  assert.match(js, /lastExportPath=r\.path/);
+  assert.match(js, /window\.api\.openExportFile\(lastExportPath\)/);
+});
+
 test('application branding hides the native menu and shows the logo with the current version', () => {
   assert.equal(fs.existsSync(appLogoFile), true);
   assert.match(html, /class="app-brand"[\s\S]*src="\.\.\/assets\/app-logo\.png"[\s\S]*id="headerVersion"/);

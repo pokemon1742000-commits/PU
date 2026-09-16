@@ -20,5 +20,6 @@ contextBridge.exposeInMainWorld('api', {
   deletePurchaseReplacement: payload => ipcRenderer.invoke('purchase-replacement:delete', payload),
   clearSession: () => ipcRenderer.invoke('session:clear'),
   deleteDatabase: keyword => ipcRenderer.invoke('database:delete', keyword),
-  exportExcel: sheets => ipcRenderer.invoke('export:save', sheets)
+  exportExcel: sheets => ipcRenderer.invoke('export:save', sheets),
+  openExportFile: filePath => ipcRenderer.invoke('export:open', filePath)
 });

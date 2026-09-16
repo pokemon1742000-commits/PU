@@ -1,5 +1,5 @@
 const $ = s => document.querySelector(s); const $$ = s => [...document.querySelectorAll(s)];
-let state = { counts:{}, rawCounts:{}, sources:[] }, activeTable = 'comparison', rawMode = false, tableRows = [], tablePage = { page:1, pageSize:100, total:0, totalPages:1 }, auditPage = { page:1, pageSize:100, total:0, totalPages:1 }, replacementPage = 1, tableRequest = 0, searchTimer, thresholdTimer, confirmationTimer, confirmationInFlight = false, confirmationQueue = new Map(), sheetPickerFiles = [], sheetPickerResolve;
+let state = { counts:{}, rawCounts:{}, sources:[] }, activeTable = 'comparison', rawMode = false, tableRows = [], tablePage = { page:1, pageSize:100, total:0, totalPages:1 }, auditPage = { page:1, pageSize:100, total:0, totalPages:1 }, replacementPage = 1, tableRequest = 0, searchTimer, thresholdTimer, confirmationTimer, confirmationInFlight = false, confirmationQueue = new Map(), sheetPickerFiles = [], sheetPickerResolve, lastExportPath = '';
 const REPLACEMENT_PAGE_SIZE = 100;
 const tableLabels = { purchase:'Dữ Liệu Đặt Hàng — Sheet kiểm tra', scan:'Dữ Liệu Quét Mã — Sheet kiểm tra', warehouse:'Dữ Liệu Nhập Kho — Sheet kiểm tra', workshop:'Dữ Liệu Xưởng Gia Công — Sheet kiểm tra', jobCodes:'Job Code — Cơ sở dữ liệu tích lũy', comparison:'Xác Nhận Mã Đối Chiếu', enough:'Đủ hàng', shortage:'Thiếu hàng', excess:'Thừa hàng', warnings:'Cảnh Báo' };
 const columns = {
@@ -28,13 +28,15 @@ function bind(){
   $('#tableSearch').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>loadTablePage(1),250)};
   $('#rawToggle').onclick=async()=>{rawMode=!rawMode;updateRawToggle();await loadTablePage(1)};
   $('#warningShortcut').onclick=async()=>{const target=activeTable==='warnings'?'purchase':'warnings';show('data',$('.nav-item[data-open-table="purchase"]'));await showTable(target)};
-  $('#exportBtn').onclick=async()=>run(async()=>{const r=await window.api.exportExcel(['comparison']);if(!r.canceled)toast(`Đã xuất: ${r.path}`)},null);
+  const exportFile=async()=>run(async()=>{const r=await window.api.exportExcel(['comparison']);if(!r.canceled){lastExportPath=r.path;$('#openExportFileBtn').hidden=false;toast(`Đã xuất: ${r.path}`)}},null);
+  $('#exportBtn').onclick=exportFile;
+  $('#openExportFileBtn').onclick=()=>run(async()=>{await window.api.openExportFile(lastExportPath)},'Đã mở file xuất');
   $('#infoBtn').onclick=()=>{showInfoPanel('releaseInfo');$('#infoDialog').showModal()};
   $$('.info-tab').forEach(button=>button.onclick=()=>showInfoPanel(button.dataset.infoPanel));
   $('#closeInfo').onclick=()=>$('#infoDialog').close();
   $('#infoDialog').onclick=event=>{if(event.target===$('#infoDialog'))$('#infoDialog').close()};
   $('#githubLink').onclick=()=>run(()=>window.api.openExternal('https://github.com/pokemon1742000-commits/PU'),null);
-  $('#exportPageBtn').onclick=$('#exportBtn').onclick;
+  $('#exportPageBtn').onclick=exportFile;
   $('#updateBtn').onclick=checkForUpdates;
   window.api.onUpdateStatus(renderUpdateStatus);
   $('#clearSession').onclick=async()=>{if(confirm('Bạn có chắc muốn xóa dữ liệu Quét Mã và các xác nhận? Dữ liệu Mua Hàng, Nhập Kho và Xưởng Gia Công sẽ được giữ lại.')) await run(async()=>refresh(await window.api.clearSession()),'Đã clear phiên làm việc');};

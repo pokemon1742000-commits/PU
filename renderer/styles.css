@@ -824,6 +824,13 @@ select {
   color: #ffffff;
 }
 
+.export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 .view {
   display: none;
 }
