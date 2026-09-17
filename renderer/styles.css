@@ -366,6 +366,32 @@ select {
   background: linear-gradient(180deg, var(--surface-muted) 0%, var(--bg) 100%);
   border-right: 1px solid var(--line);
   box-shadow: var(--shadow);
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+.sidebar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.sidebar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 8px;
+}
+
+.sidebar::-webkit-scrollbar-thumb:hover {
+  background: var(--primary);
+}
+
+/* .side-card has overflow:hidden, which lets it shrink below its content
+   height (and clip the buttons) when the sidebar runs out of room. Keep it
+   at its natural height so the sidebar scrolls instead of cutting buttons off. */
+.sidebar > .side-card {
+  flex-shrink: 0;
 }
 
 .side-card {
@@ -1781,6 +1807,8 @@ tr.total-row.total-row-sufficient td {
   justify-content: center;
   padding: 24px;
   background: rgba(15, 23, 42, 0.38);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
 }
 
 .sheet-modal-overlay[hidden] {
@@ -1860,6 +1888,117 @@ tr.total-row.total-row-sufficient td {
   padding: 12px 16px;
 }
 
+.export-type-options {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  overflow: auto;
+}
+
+.export-type-modal header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.modal-close {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.modal-close:hover,
+.modal-close:focus-visible {
+  border-color: var(--primary-dark);
+  color: var(--primary-dark);
+}
+
+.export-type-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-muted);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+}
+
+.export-type-option:hover,
+.export-type-option:focus-visible {
+  border-color: var(--primary-dark);
+}
+
+.export-type-option:active {
+  transform: scale(0.99);
+}
+
+.export-type-option[aria-pressed="true"] {
+  border-color: var(--primary-dark);
+  background: var(--surface);
+}
+
+.export-type-check {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  border: 1.5px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+  position: relative;
+}
+
+.export-type-option[aria-pressed="true"] .export-type-check {
+  border-color: var(--primary-dark);
+  background: var(--primary-dark);
+}
+
+.export-type-option[aria-pressed="true"] .export-type-check::after {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 1px;
+  width: 5px;
+  height: 9px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.export-type-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.export-type-text strong {
+  font-size: 14px;
+}
+
+.export-type-text span {
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
 .sheet-picker-row {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) minmax(260px, 320px);
@@ -1905,7 +2044,7 @@ tr.total-row.total-row-sufficient td {
   position: fixed;
   right: 18px;
   bottom: 18px;
-  max-width: 420px;
+  width: min(420px, calc(100vw - 36px));
   padding: 12px 14px;
   border-radius: 10px;
   background: #172033;
@@ -1913,6 +2052,54 @@ tr.total-row.total-row-sufficient td {
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
   font-size: 13px;
   animation: toast-in 0.2s ease;
+}
+
+/* Only lay the toast out as a flex column while it is actually visible;
+   the base rule above must stay free of `display` so the `hidden`
+   attribute (display:none) can still hide it. */
+.toast:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.toast-message {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.toast-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.toast-action-button {
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 7px;
+  background: var(--primary);
+  color: #ffffff;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: filter 0.15s ease, transform 0.1s ease;
+}
+
+.toast-action-button.toast-action-secondary {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.toast-action-button:hover {
+  filter: brightness(1.08);
+}
+
+.toast-action-button:active {
+  transform: scale(0.97);
 }
 
 /* Translucent glass surfaces */

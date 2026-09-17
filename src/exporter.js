@@ -4,26 +4,43 @@ const projectReportDefinition = ['STT','Mã dự án','Mã hàng','Tên hàng','
 const sourceComparisonDefinition = ['STT','Mã dự án','Mã hàng','Tên hàng','Số lượng PR','Số lượng PO đặt','Số lượng PO đã về','Số lượng XGC đặt','Số lượng XGC đã nhập','Tổng PO + XGC','Chênh lệch','Kết luận','Ghi chú','Mã PR','Mã PO','Nguồn XGC','Note'];
 const statusOptions = ['OK','Chưa về','Chưa về đủ','Đã về','Chưa bắn code','Check lại','Hủy','Tồn','Common'];
 
-async function exportWorkbook(file, _selected, session) {
-  const wb = createWorkbook(session);
+// Các loại báo cáo có thể xuất, mỗi loại tương ứng với đúng 1 sheet trong 1 file riêng.
+const EXPORT_TYPES = { PU: 'pu', SOURCE: 'source' };
+
+async function exportWorkbook(file, selected, session) {
+  const wb = createWorkbook(session, normalizeSelection(selected));
   await wb.xlsx.writeFile(file);
 }
 
-async function exportWorkbookBuffer(session) {
-  return createWorkbook(session).xlsx.writeBuffer();
+async function exportWorkbookBuffer(session, selected) {
+  return createWorkbook(session, normalizeSelection(selected)).xlsx.writeBuffer();
 }
 
-function createWorkbook(session) {
-  const rows = session.comparison || [];
-  const projects = [...new Set(rows.map(row => String(row.projectCode || '').trim()).filter(Boolean))];
-  const sheetName = projects.length === 1 ? projects[0] : projects.length > 1 ? 'NHIỀU DỰ ÁN' : 'So Sánh';
+// Chuẩn hóa tham số `selected` thành { pu, source }. Có thể chọn 1 hoặc cả 2 loại;
+// nếu không truyền gì hoặc giá trị không xác định, mặc định chọn cả 2 (giữ hành vi cũ).
+function normalizeSelection(selected) {
+  const list = Array.isArray(selected) ? selected.map(String) : [String(selected || '')].filter(Boolean);
+  const wantPu = list.includes(EXPORT_TYPES.PU);
+  const wantSource = list.includes(EXPORT_TYPES.SOURCE);
+  if (!wantPu && !wantSource) return { pu: true, source: true };
+  return { pu: wantPu, source: wantSource };
+}
+
+function createWorkbook(session, selection) {
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Đối Chiếu Dữ Liệu';
   wb.created = new Date();
-  const ws = wb.addWorksheet(safeWorksheetName(sheetName));
-  formatProjectReportSheet(ws, rows);
-  const sourceSheet = wb.addWorksheet('PR vs PO + XGC');
-  formatSourceComparisonSheet(sourceSheet, buildSourceComparisonRows(session));
+  if (selection.pu) {
+    const rows = session.comparison || [];
+    const projects = [...new Set(rows.map(row => String(row.projectCode || '').trim()).filter(Boolean))];
+    const sheetName = projects.length === 1 ? projects[0] : projects.length > 1 ? 'NHIỀU DỰ ÁN' : 'So Sánh';
+    const ws = wb.addWorksheet(safeWorksheetName(sheetName));
+    formatProjectReportSheet(ws, rows);
+  }
+  if (selection.source) {
+    const sourceSheet = wb.addWorksheet('PR vs PO + XGC');
+    formatSourceComparisonSheet(sourceSheet, buildSourceComparisonRows(session));
+  }
   return wb;
 }
 
@@ -258,4 +275,4 @@ function fill(argb) {
   return { type:'pattern', pattern:'solid', fgColor:{argb} };
 }
 
-module.exports = { exportWorkbook, exportWorkbookBuffer };
+module.exports = { exportWorkbook, exportWorkbookBuffer, EXPORT_TYPES };

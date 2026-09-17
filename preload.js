@@ -21,5 +21,6 @@ contextBridge.exposeInMainWorld('api', {
   clearSession: () => ipcRenderer.invoke('session:clear'),
   deleteDatabase: keyword => ipcRenderer.invoke('database:delete', keyword),
   exportExcel: sheets => ipcRenderer.invoke('export:save', sheets),
-  openExportFile: filePath => ipcRenderer.invoke('export:open', filePath)
+  openExportFile: filePath => ipcRenderer.invoke('export:open', filePath),
+  showExportFileInFolder: filePath => ipcRenderer.invoke('export:show-in-folder', filePath)
 });

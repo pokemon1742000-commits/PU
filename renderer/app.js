@@ -15,7 +15,7 @@ const columns = {
   warnings:[['stt','STT'],['projectCode','Mã dự án'],['purchaseOrder','Số PR'],['itemCode','Mã hàng'],['itemName','Tên hàng'],['quantity','Số lượng'],['sourceFile','File nguồn'],['sourceRow','Dòng'],['note','Ghi chú']]
 };
 
-async function init(){ $('#sheetOptions').innerHTML='<div class="export-single-sheet"><strong>2 sheet dữ liệu đối chiếu</strong><span>Gồm SỐ LIỆU XUẤT KHO và đối chiếu PR với PO + XGC.</span></div>'; applyTheme(localStorage.getItem('theme')||'default'); bind(); await refresh(await window.api.getState()); requestAnimationFrame(updateNavIndicator); }
+async function init(){ $('#sheetOptions').innerHTML='<div class="export-single-sheet"><strong>2 sheet dữ liệu đối chiếu</strong><span>Gồm SỐ LIỆU XUẤT KHO và đối chiếu PR với PO + XGC. Chọn 1 hoặc cả 2 loại khi xuất: So sánh PU, hoặc PR vs PO + XGC.</span></div>'; applyTheme(localStorage.getItem('theme')||'default'); bind(); await refresh(await window.api.getState()); requestAnimationFrame(updateNavIndicator); }
 function bind(){
   $$('.nav').forEach(b=>b.onclick=async()=>{show(b.dataset.view,b);if(b.dataset.openTable)await showTable(b.dataset.openTable)});
   $$('.load').forEach(b=>b.onclick=()=>handleLoad(b));
@@ -28,15 +28,19 @@ function bind(){
   $('#tableSearch').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>loadTablePage(1),250)};
   $('#rawToggle').onclick=async()=>{rawMode=!rawMode;updateRawToggle();await loadTablePage(1)};
   $('#warningShortcut').onclick=async()=>{const target=activeTable==='warnings'?'purchase':'warnings';show('data',$('.nav-item[data-open-table="purchase"]'));await showTable(target)};
-  const exportFile=async()=>run(async()=>{const r=await window.api.exportExcel(['comparison']);if(!r.canceled){lastExportPath=r.path;$('#openExportFileBtn').hidden=false;toast(`Đã xuất: ${r.path}`)}},null);
-  $('#exportBtn').onclick=exportFile;
+  $('#exportBtn').onclick=openExportTypePicker;
   $('#openExportFileBtn').onclick=()=>run(async()=>{await window.api.openExportFile(lastExportPath)},'Đã mở file xuất');
+  $('#cancelExportTypePicker').onclick=()=>closeExportTypePicker();
+  $('#closeExportTypePicker').onclick=()=>closeExportTypePicker();
+  $('#exportTypePicker').onclick=event=>{if(event.target===$('#exportTypePicker'))closeExportTypePicker()};
+  $$('.export-type-option').forEach(button=>button.onclick=()=>toggleExportType(button));
+  $('#confirmExportTypePicker').onclick=()=>{const types=selectedExportTypes();if(!types.length)return;closeExportTypePicker();exportFile(types)};
   $('#infoBtn').onclick=()=>{showInfoPanel('releaseInfo');$('#infoDialog').showModal()};
   $$('.info-tab').forEach(button=>button.onclick=()=>showInfoPanel(button.dataset.infoPanel));
   $('#closeInfo').onclick=()=>$('#infoDialog').close();
   $('#infoDialog').onclick=event=>{if(event.target===$('#infoDialog'))$('#infoDialog').close()};
   $('#githubLink').onclick=()=>run(()=>window.api.openExternal('https://github.com/pokemon1742000-commits/PU'),null);
-  $('#exportPageBtn').onclick=exportFile;
+  $('#exportPageBtn').onclick=openExportTypePicker;
   $('#updateBtn').onclick=checkForUpdates;
   window.api.onUpdateStatus(renderUpdateStatus);
   $('#clearSession').onclick=async()=>{if(confirm('Bạn có chắc muốn xóa dữ liệu Quét Mã và các xác nhận? Dữ liệu Mua Hàng, Nhập Kho và Xưởng Gia Công sẽ được giữ lại.')) await run(async()=>refresh(await window.api.clearSession()),'Đã clear phiên làm việc');};
@@ -144,6 +148,18 @@ function confirmSheetSelection(){
 }
 
 function closeSheetPicker(value){$('#sheetPicker').hidden=true;const resolve=sheetPickerResolve;sheetPickerResolve=null;sheetPickerFiles=[];resolve?.(value)}
+function openExportTypePicker(){$$('.export-type-option').forEach(button=>button.setAttribute('aria-pressed','false'));$('#confirmExportTypePicker').disabled=true;$('#exportTypePicker').hidden=false}
+function closeExportTypePicker(){$('#exportTypePicker').hidden=true}
+function toggleExportType(button){button.setAttribute('aria-pressed',button.getAttribute('aria-pressed')==='true'?'false':'true');$('#confirmExportTypePicker').disabled=!selectedExportTypes().length}
+function selectedExportTypes(){return $$('.export-type-option[aria-pressed="true"]').map(button=>button.dataset.exportType)}
+function handleExportResult(r){if(!r.canceled){lastExportPath=r.path;$('#openExportFileBtn').hidden=false;toastActions(`Đã xuất: ${r.path}`,[{label:'Mở file xuất',onClick:()=>run(async()=>{await window.api.openExportFile(lastExportPath)},'Đã mở file xuất')},{label:'Mở thư mục chứa file',onClick:()=>run(async()=>{await window.api.showExportFileInFolder(lastExportPath)},'Đã mở thư mục chứa file')}])}}
+// Tương thích ngược: nếu không truyền loại nào, gọi giống bản cũ
+// exportExcel(['comparison']) — 'comparison' không khớp 'pu' hay 'source' nên
+// exporter.js hiểu là xuất đầy đủ cả 2 sheet như hành vi trước đây.
+function exportFile(exportTypes){
+  if(!exportTypes||!exportTypes.length) return run(async()=>{const r=await window.api.exportExcel(['comparison']);handleExportResult(r)},null);
+  return run(async()=>{const r=await window.api.exportExcel(exportTypes);handleExportResult(r)},null);
+}
 
 async function applyThreshold(){
   if(!(state.counts?.scans&&(state.counts?.purchase||state.counts?.warehouse||state.counts?.workshop)))return;
@@ -251,5 +267,5 @@ function renderPagination(){const {page,total,totalPages,pageSize}=tablePage,sta
 let deleteStep=1; function startDelete(){deleteStep=1;renderDelete();$('#deleteDialog').showModal()} function renderDelete(){const titles=['Xóa toàn bộ dữ liệu Mua Hàng?','Hành động không thể hoàn tác','Xác nhận lần cuối'];const texts=['Baseline tích lũy sẽ bị xóa sau ba bước xác nhận.','Toàn bộ dữ liệu Mua Hàng từ trước đến nay sẽ mất. Một backup cuối sẽ được tạo.','Nhập chính xác từ XÓA để tiếp tục.'];$('#confirmStep').textContent=deleteStep;$('#confirmTitle').textContent=titles[deleteStep-1];$('#confirmText').textContent=texts[deleteStep-1];$('#deleteKeyword').classList.toggle('hidden',deleteStep!==3);$('#confirmDelete').textContent=deleteStep===3?'XÓA VĨNH VIỄN':'Xác nhận';} async function advanceDelete(){if(deleteStep<3){deleteStep++;renderDelete();return}await run(async()=>{await refresh(await window.api.deleteDatabase($('#deleteKeyword').value));$('#deleteDialog').close()},'Đã xóa database; backup cuối đã được tạo');}
 function updateNavIndicator(){const indicator=$('.nav-indicator'),active=$('.nav-item.active');if(!indicator||!active)return;const parent=active.parentElement,p=parent.getBoundingClientRect(),b=active.getBoundingClientRect();indicator.style.width=`${b.width}px`;indicator.style.transform=`translateX(${b.left-p.left+parent.scrollLeft}px)`}
 function applyTheme(theme){document.body.classList.remove('theme-mint','theme-sky','theme-lavender');if(theme!=='default')document.body.classList.add(`theme-${theme}`);$$('.theme-dot').forEach(b=>b.classList.toggle('active',b.dataset.theme===theme));localStorage.setItem('theme',theme)}
-async function run(fn,success){try{document.body.style.cursor='progress';await fn();if(success)toast(success)}catch(e){toast(`Lỗi: ${e.message}`,true)}finally{document.body.style.cursor=''}}function toast(msg,error=false){const t=$('#toast');t.textContent=msg;t.style.background=error?'#9f3732':'';t.hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>t.hidden=true,4200)}function labelKind(k){return {purchase:'Mua Hàng',scan:'Quét Mã',warehouse:'Nhập Kho',workshop:'Xưởng Gia Công'}[k]}function escapeHtml(v){return String(v).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
+async function run(fn,success){try{document.body.style.cursor='progress';await fn();if(success)toast(success)}catch(e){toast(`Lỗi: ${e.message}`,true)}finally{document.body.style.cursor=''}}function toast(msg,error=false){const t=$('#toast');t.innerHTML='';t.textContent=msg;t.style.background=error?'#9f3732':'';t.hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>t.hidden=true,4200)}function toastActions(msg,actions){const t=$('#toast');clearTimeout(toast.timer);t.innerHTML='';t.style.background='';const message=document.createElement('div');message.className='toast-message';message.textContent=msg;const actionsRow=document.createElement('div');actionsRow.className='toast-actions';actions.forEach((action,index)=>{const btn=document.createElement('button');btn.type='button';btn.className='toast-action-button'+(index>0?' toast-action-secondary':'');btn.textContent=action.label;btn.onclick=()=>{t.hidden=true;action.onClick()};actionsRow.append(btn)});t.append(message,actionsRow);t.hidden=false;toast.timer=setTimeout(()=>t.hidden=true,8000)}function labelKind(k){return {purchase:'Mua Hàng',scan:'Quét Mã',warehouse:'Nhập Kho',workshop:'Xưởng Gia Công'}[k]}function escapeHtml(v){return String(v).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
 init();

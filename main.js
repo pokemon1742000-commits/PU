@@ -4,7 +4,7 @@ const fs = require('fs/promises');
 const { Worker } = require('worker_threads');
 const { autoUpdater } = require('electron-updater');
 const { buildComparison, resolveReview, filterPurchasesByProjectPrefix, prioritizeProjectWarnings, mergePurchaseRows, mergeWarehouseRows, mergeWorkshopRows } = require('./src/processor');
-const { exportWorkbook } = require('./src/exporter');
+const { exportWorkbook, EXPORT_TYPES } = require('./src/exporter');
 const { Database } = require('./src/storage');
 const { runSelfCheck } = require('./src/self-check');
 const { auditSessionData, searchLoadedCode } = require('./src/data-audit');
@@ -149,7 +149,13 @@ function registerIpc() {
   });
   ipcMain.handle('export:save', async (_e, sheetNames) => {
     const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
-    const result = await dialog.showSaveDialog(win, { defaultPath: `DoiChieu_${stamp}.xlsx`, filters: [{ name: 'Excel', extensions: ['xlsx'] }] });
+    const list = Array.isArray(sheetNames) ? sheetNames.map(String) : [];
+    const wantPu = list.includes(EXPORT_TYPES.PU), wantSource = list.includes(EXPORT_TYPES.SOURCE);
+    const onlyPu = wantPu && !wantSource, onlySource = wantSource && !wantPu;
+    // Chọn cả 2 (hoặc không truyền loại nào, tương thích ngược với bản cũ) giữ
+    // nguyên tên file mặc định như trước: `DoiChieu_${stamp}.xlsx`.
+    const defaultPath = onlyPu ? `DoiChieu_PU_${stamp}.xlsx` : onlySource ? `DoiChieu_PR_PO_XGC_${stamp}.xlsx` : `DoiChieu_${stamp}.xlsx`;
+    const result = await dialog.showSaveDialog(win, { defaultPath, filters: [{ name: 'Excel', extensions: ['xlsx'] }] });
     if (result.canceled) return { canceled: true };
     await exportWorkbook(result.filePath, sheetNames, session);
     return { canceled: false, path: result.filePath };
@@ -161,6 +167,14 @@ function registerIpc() {
     catch { throw new Error('Không tìm thấy file xuất.'); }
     const error = await shell.openPath(target);
     if (error) throw new Error(error);
+    return true;
+  });
+  ipcMain.handle('export:show-in-folder', async (_e, filePath) => {
+    const target = String(filePath || '');
+    if (!target || path.extname(target).toLowerCase() !== '.xlsx') throw new Error('File xuất không hợp lệ.');
+    try { await fs.access(target); }
+    catch { throw new Error('Không tìm thấy file xuất.'); }
+    shell.showItemInFolder(target);
     return true;
   });
 }
