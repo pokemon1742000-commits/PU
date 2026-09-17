@@ -1,7 +1,7 @@
 const ExcelJS = require('exceljs');
 
 const projectReportDefinition = ['STT','Mã dự án','Mã hàng','Tên hàng','Số lượng BOOM','Số liệu XK','Maker','Ngày bắn code','Ngày nhập kho','Số lượng nhập kho','Tình trạng','Note','Người Vận Hành','Mã PO','Hạn Giao Hàng','Note đổi mã','Đổi PR'];
-const sourceComparisonDefinition = ['STT','Mã dự án','Mã hàng','Tên hàng','Số lượng PR','Số lượng PO đặt','Số lượng PO đã về','Số lượng XGC đặt','Số lượng XGC đã nhập','Tổng PO + XGC','Chênh lệch','Kết luận','Ghi chú','Mã PR','Mã PO','Nguồn XGC'];
+const sourceComparisonDefinition = ['STT','Mã dự án','Mã hàng','Tên hàng','Số lượng PR','Số lượng PO đặt','Số lượng PO đã về','Số lượng XGC đặt','Số lượng XGC đã nhập','Tổng PO + XGC','Chênh lệch','Kết luận','Ghi chú','Mã PR','Mã PO','Nguồn XGC','Note'];
 const statusOptions = ['OK','Chưa về','Chưa về đủ','Đã về','Chưa bắn code','Check lại','Hủy','Tồn','Common'];
 
 async function exportWorkbook(file, _selected, session) {
@@ -94,7 +94,7 @@ function formatProjectReportSheet(ws, rows) {
 }
 
 function formatSourceComparisonSheet(ws, rows) {
-  ws.mergeCells('A3:P4');
+  ws.mergeCells('A3:Q4');
   const title = ws.getCell('A3');
   title.value = 'ĐỐI CHIẾU PR VỚI PO + XGC';
   title.font = { name:'Times New Roman', size:20, bold:true };
@@ -121,18 +121,18 @@ function formatSourceComparisonSheet(ws, rows) {
       index + 1, row.projectCode, row.itemCode, row.itemName,
       row.prQuantity, row.poOrderedQuantity, row.poReceivedQuantity,
       row.xgcOrderedQuantity, row.xgcReceivedQuantity, row.sourceQuantity,
-      row.difference, row.status, row.note, row.prCodes, row.poCodes, row.xgcCodes
+      row.difference, row.status, row.note, row.prCodes, row.poCodes, row.xgcCodes, row.remainingQuantity
     ]);
     output.font = { name:'Aptos Narrow', size:11 };
     output.alignment = { vertical:'top' };
     [1,2,5,6,7,8,9,10,11,12].forEach(col => output.getCell(col).alignment = { horizontal:'center', vertical:'middle', wrapText:true });
-    [3,4,13,14,15,16].forEach(col => output.getCell(col).alignment = { vertical:'top', wrapText:true });
+    [3,4,13,14,15,16,17].forEach(col => output.getCell(col).alignment = { vertical:'top', wrapText:true });
     output.getCell(12).fill = fill(row.status === 'Đủ' ? 'FF92D050' : row.status === 'Check lại' ? 'FFFFC000' : 'FFFFFF00');
   });
-  [9,17,29,29,14,16,16,16,17,16,14,14,28,24,24,24].forEach((width, index) => { ws.getColumn(index + 1).width = width; });
+  [9,17,29,29,14,16,16,16,17,16,14,14,28,24,24,24,17].forEach((width, index) => { ws.getColumn(index + 1).width = width; });
   [1,5,6,7,8,9,10,11].forEach(col => { ws.getColumn(col).numFmt = '0'; });
   ws.views = [{ state:'frozen', xSplit:4, ySplit:9, topLeftCell:'E10', activeCell:'A10' }];
-  ws.autoFilter = { from:'A9', to:`P${Math.max(9, 9 + rows.length)}` };
+  ws.autoFilter = { from:'A9', to:`Q${Math.max(9, 9 + rows.length)}` };
   ws.pageSetup = { orientation:'landscape', fitToPage:true, fitToWidth:1, fitToHeight:0, paperSize:9 };
 }
 
@@ -144,14 +144,19 @@ function buildSourceComparisonRows(session) {
     if (!projectCode || !itemCode) return;
     const key = `${projectCode.toUpperCase()}|${itemCode}`;
     const group = groups.get(key) || {
-      projectCode, itemCode, itemName:'', prQuantity:0, poOrderedQuantity:0, poReceivedQuantity:0,
-      xgcOrderedQuantity:0, xgcReceivedQuantity:0, prCodes:[], poCodes:[], xgcCodes:[], hasPr:false, hasSource:false
+      projectCode, itemCode, itemName:'', prEntries:[], poOrderedQuantity:0, poReceivedQuantity:0,
+      xgcOrderedQuantity:0, xgcReceivedQuantity:0, poCodes:[], xgcCodes:[], hasPr:false, hasSource:false
     };
     if (row.itemName && !group.itemName) group.itemName = row.itemName;
     if (source === 'pr') {
       group.hasPr = true;
-      group.prQuantity += numeric(row.quantity);
-      appendUnique(group.prCodes, row.purchaseOrder);
+      // Mỗi dòng PR giữ nguyên số lượng và cột I (Số lượng còn lại) riêng của nó,
+      // không gộp/nối chuỗi với các dòng PR khác cùng mã hàng.
+      group.prEntries.push({
+        quantity: numeric(row.quantity),
+        remainingQuantity: String(row.remainingQuantity || '').trim(),
+        purchaseOrder: String(row.purchaseOrder || '').trim()
+      });
     } else {
       group.hasSource = true;
       const ordered = numeric(row.orderedQuantity), received = numeric(row.receivedQuantity);
@@ -170,17 +175,35 @@ function buildSourceComparisonRows(session) {
   add(session.purchase, 'pr');
   add(session.warehouse, 'po');
   add(session.workshop, 'xgc');
-  return [...groups.values()].map(group => {
+  const rows = [];
+  for (const group of groups.values()) {
+    const prQuantity = group.prEntries.reduce((total, entry) => total + entry.quantity, 0);
     const sourceQuantity = group.poOrderedQuantity + group.xgcOrderedQuantity;
-    const difference = sourceQuantity - group.prQuantity;
+    const difference = sourceQuantity - prQuantity;
     let status, note;
     if (!group.hasPr) { status = 'Check lại'; note = 'Có trong PO/XGC nhưng không có trong PR'; }
     else if (!group.hasSource) { status = 'Chưa đặt hàng'; note = 'Có trong PR nhưng chưa có trong PO và XGC'; }
     else if (difference < -1e-8) { status = 'Thiếu'; note = `Thiếu ${Math.abs(difference)}`; }
     else if (difference > 1e-8) { status = 'Thừa'; note = `Thừa ${difference}`; }
     else { status = 'Đủ'; note = ''; }
-    return { ...group, sourceQuantity, difference, status, note, prCodes:group.prCodes.join('; '), poCodes:group.poCodes.join('; '), xgcCodes:group.xgcCodes.join('; ') };
-  });
+    const base = {
+      projectCode: group.projectCode, itemCode: group.itemCode, itemName: group.itemName,
+      poOrderedQuantity: group.poOrderedQuantity, poReceivedQuantity: group.poReceivedQuantity,
+      xgcOrderedQuantity: group.xgcOrderedQuantity, xgcReceivedQuantity: group.xgcReceivedQuantity,
+      sourceQuantity, difference, status, note,
+      poCodes: group.poCodes.join('; '), xgcCodes: group.xgcCodes.join('; ')
+    };
+    if (group.prEntries.length) {
+      // Tách mỗi dòng PR gốc thành một dòng riêng trong sheet, thay vì gộp
+      // số lượng và cột I lại với nhau khi cùng một mã hàng có nhiều dòng PR.
+      for (const entry of group.prEntries) {
+        rows.push({ ...base, prQuantity: entry.quantity, prCodes: entry.purchaseOrder, remainingQuantity: entry.remainingQuantity });
+      }
+    } else {
+      rows.push({ ...base, prQuantity: 0, prCodes: '', remainingQuantity: '' });
+    }
+  }
+  return rows;
 }
 
 function sourceCode(value) {

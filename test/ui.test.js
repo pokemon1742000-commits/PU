@@ -61,7 +61,7 @@ test('file import supports multiple files and explicit multi-sheet selection', (
 });
 
 test('workshop import exposes the XGC button, table, mapping, and raw-data view', () => {
-  assert.match(html, /data-kind="workshop"[\s\S]*Dữ Liệu Xưởng Gia Công/);
+  assert.match(html, /data-kind="workshop"[\s\S]*Tổng hợp đơn hàng sản xuất/);
   assert.match(html, /data-open-table="workshop"/);
   assert.match(html, /id="dashWorkshop"/);
   for (const label of ['Số PR \\(MKS\\)','Số PO','Ngày PR','Mã hàng','Tên hàng','Số lượng đặt','Hạn ngày về','Số lượng nhập kho','Ngày nhập kho']) {

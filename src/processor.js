@@ -102,6 +102,21 @@ async function processFilesInternal(kind, files) {
   throw new Error('Loại file không hợp lệ.');
 }
 
+function columnLetterToIndex(letter) {
+  return String(letter).toUpperCase().split('').reduce((n, ch) => n * 26 + (ch.charCodeAt(0) - 64), 0) - 1;
+}
+function cellByColumnLetter(values, letter) {
+  const value = values[columnLetterToIndex(letter)];
+  return value instanceof Date ? '' : value;
+}
+function purchaseRemainingQuantity(map, values) {
+  const byHeader = clean(getBy(map, values, ['Số lượng còn lại']));
+  if (byHeader) return byHeader;
+  // Dự phòng: một số file PR đặt tên cột I khác "Số lượng còn lại" (hoặc không có
+  // header khớp), nhưng dữ liệu thực tế (ví dụ tên NCC/ghi chú vật liệu) vẫn luôn
+  // nằm ở cột I. Lấy trực tiếp theo vị trí cột để không bị mất dữ liệu.
+  return clean(cellByColumnLetter(values, 'I'));
+}
 async function processPurchases(files) {
   const out = [], warnings = [];
   for (const source of files) {
@@ -122,8 +137,9 @@ async function processPurchases(files) {
         const marker = clean(getBy(map, r.values, ['Maker', 'Marker']));
         const quantity = number(getBy(map, r.values, ['Tình trạng']));
         const supplier = purchaseSupplier(map, r.values);
+        const remainingQuantity = purchaseRemainingQuantity(map, r.values);
         if (!purchaseOrder && !itemCode) continue;
-        out.push({ projectCode: projectCode(purchaseOrder), purchaseOrder, itemCode, itemName: marker, marker, supplier, quantity, sourceFile: basename(sourceName || file), sourceSheet: ws.name || '', sourceRow: r.rowNo });
+        out.push({ projectCode: projectCode(purchaseOrder), purchaseOrder, itemCode, itemName: marker, marker, supplier, quantity, remainingQuantity, sourceFile: basename(sourceName || file), sourceSheet: ws.name || '', sourceRow: r.rowNo });
       }
     }
     if (!hasSheet) throw new Error(`File ${basename(sourceName || file)} không có sheet dữ liệu.`);
@@ -409,9 +425,10 @@ function mergePurchaseRows(rows) {
     const key = [row.projectCode, row.itemCode].map(norm).join('|');
     const group = groups.get(key) || {
       ...row, quantity: 0, mergedRowCount: 0,
-      purchaseOrders: [], suppliers: [], sourceFiles: [], sourceRows: [], sourceLocations: []
+      purchaseOrders: [], suppliers: [], remainingQuantities: [], sourceFiles: [], sourceRows: [], sourceLocations: []
     };
     group.quantity += number(row.quantity);
+    if (row.remainingQuantity && !group.remainingQuantities.includes(row.remainingQuantity)) group.remainingQuantities.push(row.remainingQuantity);
     group.mergedRowCount += Number(row.mergedRowCount) || 1;
     if (!group.itemName && row.itemName) group.itemName = row.itemName;
     if (!group.marker && row.marker) group.marker = row.marker;
@@ -438,11 +455,12 @@ function mergePurchaseRows(rows) {
       ...group,
       purchaseOrder: group.purchaseOrders.join('; '),
       supplier: group.suppliers.join('; '),
+      remainingQuantity: group.remainingQuantities.join('; '),
       sourceFile: group.sourceFiles.join('; '),
       sourceRow: group.sourceRows.join(', '),
       note
     };
-  }).map(({ purchaseOrders, suppliers, sourceFiles, sourceRows, ...row }) => row);
+  }).map(({ purchaseOrders, suppliers, remainingQuantities, sourceFiles, sourceRows, ...row }) => row);
   ensureTotals('Mua Hàng', rows || [], merged, ['quantity']);
   return merged;
 }

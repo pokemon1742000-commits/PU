@@ -132,9 +132,9 @@ test('export adds a PR versus PO and XGC sheet with quantity and code checks', a
   await exportWorkbook(file, ['comparison'], {
     comparison:[],
     purchase:[
-      { projectCode:'MEC1', purchaseOrder:'PR-A', itemCode:'A', itemName:'A item', quantity:10 },
-      { projectCode:'MEC1', purchaseOrder:'PR-B', itemCode:'B', quantity:5 },
-      { projectCode:'MEC1', purchaseOrder:'PR-C', itemCode:'C', quantity:2 }
+      { projectCode:'MEC1', purchaseOrder:'PR-A', itemCode:'A', itemName:'A item', quantity:10, remainingQuantity:'Powder Coating - Gray E1117' },
+      { projectCode:'MEC1', purchaseOrder:'PR-B', itemCode:'B', quantity:5, remainingQuantity:'' },
+      { projectCode:'MEC1', purchaseOrder:'PR-C', itemCode:'C', quantity:2, remainingQuantity:'Anod hóa' }
     ],
     warehouse:[
       { projectCode:'MEC1', itemCode:'A', poNumber:'PO-A', orderedQuantity:8, receivedQuantity:7 },
@@ -148,7 +148,7 @@ test('export adds a PR versus PO and XGC sheet with quantity and code checks', a
   });
   const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile(file);
   const sheet = workbook.getWorksheet('PR vs PO + XGC');
-  assert.deepEqual(sheet.getRow(9).values.slice(1), ['STT','Mã dự án','Mã hàng','Tên hàng','Số lượng PR','Số lượng PO đặt','Số lượng PO đã về','Số lượng XGC đặt','Số lượng XGC đã nhập','Tổng PO + XGC','Chênh lệch','Kết luận','Ghi chú','Mã PR','Mã PO','Nguồn XGC']);
+  assert.deepEqual(sheet.getRow(9).values.slice(1), ['STT','Mã dự án','Mã hàng','Tên hàng','Số lượng PR','Số lượng PO đặt','Số lượng PO đã về','Số lượng XGC đặt','Số lượng XGC đã nhập','Tổng PO + XGC','Chênh lệch','Kết luận','Ghi chú','Mã PR','Mã PO','Nguồn XGC','Note']);
   const rows = new Map(sheet.getRows(10, sheet.rowCount - 9).map(row => [row.getCell(3).value, row.values.slice(1)]));
   assert.deepEqual(rows.get('A').slice(9, 13), [10, 0, 'Đủ', '']);
   assert.deepEqual(rows.get('B').slice(9, 13), [0, -5, 'Chưa đặt hàng', 'Có trong PR nhưng chưa có trong PO và XGC']);
@@ -156,4 +156,7 @@ test('export adds a PR versus PO and XGC sheet with quantity and code checks', a
   assert.deepEqual(rows.get('D').slice(9, 13), [4, 4, 'Check lại', 'Có trong PO/XGC nhưng không có trong PR']);
   assert.deepEqual(rows.get('E').slice(9, 13), [1, 1, 'Check lại', 'Có trong PO/XGC nhưng không có trong PR']);
   assert.equal(rows.get('A')[15], 'A_GC');
+  assert.equal(rows.get('A')[16], 'Powder Coating - Gray E1117');
+  assert.equal(rows.get('B')[16], '');
+  assert.equal(rows.get('C')[16], 'Anod hóa');
 });

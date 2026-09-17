@@ -130,10 +130,11 @@ class Database {
       if (!current) {
         const mergedRowCount = Number(row.mergedRowCount) || 1;
         const sourceLocations = row.sourceLocations?.length ? [...row.sourceLocations] : (location ? [location] : []);
-        imported.set(key, { ...row, quantity: Number(row.quantity) || 0, mergedRowCount, sourceLocations, suppliers:row.supplier ? [row.supplier] : [] });
+        imported.set(key, { ...row, quantity: Number(row.quantity) || 0, remainingQuantities: row.remainingQuantity ? [row.remainingQuantity] : [], mergedRowCount, sourceLocations, suppliers:row.supplier ? [row.supplier] : [] });
         continue;
       }
       current.quantity += Number(row.quantity) || 0;
+      if (row.remainingQuantity && !current.remainingQuantities.includes(row.remainingQuantity)) current.remainingQuantities.push(row.remainingQuantity);
       current.mergedRowCount += Number(row.mergedRowCount) || 1;
       if (row.supplier && !current.suppliers.some(value => String(value).trim().toUpperCase() === String(row.supplier).trim().toUpperCase())) current.suppliers.push(row.supplier);
       if (location && !current.sourceLocations.includes(location)) current.sourceLocations.push(location);
@@ -141,10 +142,11 @@ class Database {
     const groupedIncoming = [...imported.values()].map(row => ({
       ...row,
       supplier:row.suppliers.join('; '),
+      remainingQuantity:row.remainingQuantities.join('; '),
       note: row.mergedRowCount > 1
         ? `Gộp ${row.mergedRowCount} dòng${row.sourceLocations.length ? `: ${row.sourceLocations.join('; ')}` : ''}`
         : (row.note || '')
-    })).map(({ suppliers, ...row }) => row);
+    })).map(({ suppliers, remainingQuantities, ...row }) => row);
     const incomingTotal = incoming.reduce((total, row) => total + (Number(row.quantity) || 0), 0);
     const groupedTotal = groupedIncoming.reduce((total, row) => total + (Number(row.quantity) || 0), 0);
     if (Math.abs(incomingTotal - groupedTotal) > 1e-8) {
@@ -157,7 +159,7 @@ class Database {
     for (const row of groupedIncoming) {
       const key = this.key(row), old = map.get(key);
       if (!old) { map.set(key, row); added++; }
-      else if (['projectCode','purchaseOrder','itemCode','itemName','marker','supplier','quantity','mergedRowCount','note'].some(field => old[field] !== row[field])) {
+      else if (['projectCode','purchaseOrder','itemCode','itemName','marker','supplier','quantity','remainingQuantity','mergedRowCount','note'].some(field => old[field] !== row[field])) {
         map.set(key, { ...old, ...row, previousQuantity: old.quantity, updatedAt: new Date().toISOString() }); updated++;
       } else unchanged++;
     }
