@@ -175,7 +175,7 @@ function buildSourceComparisonRows(session) {
     const difference = sourceQuantity - group.prQuantity;
     let status, note;
     if (!group.hasPr) { status = 'Check lại'; note = 'Có trong PO/XGC nhưng không có trong PR'; }
-    else if (!group.hasSource) { status = 'Chưa về'; note = 'Có trong PR nhưng chưa có trong PO và XGC'; }
+    else if (!group.hasSource) { status = 'Chưa đặt hàng'; note = 'Có trong PR nhưng chưa có trong PO và XGC'; }
     else if (difference < -1e-8) { status = 'Thiếu'; note = `Thiếu ${Math.abs(difference)}`; }
     else if (difference > 1e-8) { status = 'Thừa'; note = `Thừa ${difference}`; }
     else { status = 'Đủ'; note = ''; }

@@ -151,7 +151,7 @@ test('export adds a PR versus PO and XGC sheet with quantity and code checks', a
   assert.deepEqual(sheet.getRow(9).values.slice(1), ['STT','Mã dự án','Mã hàng','Tên hàng','Số lượng PR','Số lượng PO đặt','Số lượng PO đã về','Số lượng XGC đặt','Số lượng XGC đã nhập','Tổng PO + XGC','Chênh lệch','Kết luận','Ghi chú','Mã PR','Mã PO','Nguồn XGC']);
   const rows = new Map(sheet.getRows(10, sheet.rowCount - 9).map(row => [row.getCell(3).value, row.values.slice(1)]));
   assert.deepEqual(rows.get('A').slice(9, 13), [10, 0, 'Đủ', '']);
-  assert.deepEqual(rows.get('B').slice(9, 13), [0, -5, 'Chưa về', 'Có trong PR nhưng chưa có trong PO và XGC']);
+  assert.deepEqual(rows.get('B').slice(9, 13), [0, -5, 'Chưa đặt hàng', 'Có trong PR nhưng chưa có trong PO và XGC']);
   assert.deepEqual(rows.get('C').slice(9, 13), [3, 1, 'Thừa', 'Thừa 1']);
   assert.deepEqual(rows.get('D').slice(9, 13), [4, 4, 'Check lại', 'Có trong PO/XGC nhưng không có trong PR']);
   assert.deepEqual(rows.get('E').slice(9, 13), [1, 1, 'Check lại', 'Có trong PO/XGC nhưng không có trong PR']);
