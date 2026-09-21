@@ -1,7 +1,7 @@
 const { app, BrowserWindow, dialog, ipcMain, shell, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs/promises');
-const { Worker } = require('worker_threads');
+const { runFileParser } = require('./src/file-runner');
 const { autoUpdater } = require('electron-updater');
 const { buildComparison, resolveReview, filterPurchasesByProjectPrefix, prioritizeProjectWarnings, mergePurchaseRows, mergeWarehouseRows, mergeWorkshopRows } = require('./src/processor');
 const { exportWorkbook, EXPORT_TYPES } = require('./src/exporter');
@@ -181,8 +181,9 @@ function registerIpc() {
 
 async function load(kind, selections) {
   try {
-    const filePaths = selections.map(selection => selection.path);
+    const selectedPaths = selections.map(selection => selection.path);
     const result = await processFilesInWorker(kind, selections);
+    const filePaths = result.successfulFiles || selectedPaths;
     if (kind === 'purchase') {
       const merged = await database.mergePurchases(result.rows);
       session.purchaseAll = merged.rows;
@@ -211,7 +212,7 @@ async function load(kind, selections) {
     session.sources.push(...filePaths.map(p => ({ kind, file: path.basename(p), path: p, loadedAt: new Date().toISOString() })));
     await saveWorkingSession();
     autoCompareWhenReady();
-    return { ...summary(), loadStats: result.stats || { loaded: result.rows.length } };
+    return { ...summary(), loadStats: { ...(result.stats || { loaded: result.rows.length }), fileErrors: result.fileErrors || [] } };
   } catch (error) { throw new Error(error.message || String(error)); }
 }
 
@@ -244,14 +245,6 @@ function rowsFor(name, options = {}) {
   return { rows, page, pageSize, total, totalPages };
 }
 
-function processFilesInWorker(kind, files) {
-  return (async () => {
-    const results = [];
-    for (const source of files) results.push(await processSingleFileInWorker(kind, source));
-    return combineFileResults(kind, results);
-  })();
-}
-
 function readBuiltInJobCodeReference() {
   if (!builtInJobCodeReference) {
     builtInJobCodeReference = processFilesInWorker('reference', [{ path: BUILT_IN_JOB_CODE_FILE, sheets: ['Job code'] }])
@@ -278,41 +271,31 @@ function sessionWithBuiltInJobCodes(base, reference) {
 }
 
 function processSingleFileInWorker(kind, source) {
-  return new Promise((resolve, reject) => {
-    const worker = new Worker(path.join(__dirname, 'src', 'file-worker.js'), {
-      workerData: { kind, files: [source] },
-      resourceLimits: { maxOldGenerationSizeMb: 4096 }
-    });
-    let settled = false;
-    worker.once('message', message => {
-      settled = true;
-      if (message.ok) resolve(message.result);
-      else reject(new Error(message.error));
-    });
-    worker.once('error', error => { settled = true; reject(error); });
-    worker.once('exit', code => {
-      if (!settled && code !== 0) reject(new Error(`Tiến trình đọc Excel đã dừng với mã lỗi ${code}.`));
-    });
-  });
+  return runFileParser(path.join(__dirname, 'src', 'file-worker.js'), { kind, files: [source] });
 }
 
 function inspectFileInWorker(filePath) {
-  return new Promise((resolve, reject) => {
-    const worker = new Worker(path.join(__dirname, 'src', 'file-worker.js'), {
-      workerData: { action: 'inspect', filePath },
-      resourceLimits: { maxOldGenerationSizeMb: 4096 }
-    });
-    let settled = false;
-    worker.once('message', message => {
-      settled = true;
-      if (message.ok) resolve(message.result);
-      else reject(new Error(message.error));
-    });
-    worker.once('error', error => { settled = true; reject(error); });
-    worker.once('exit', code => {
-      if (!settled && code !== 0) reject(new Error(`Tiến trình đọc danh sách sheet đã dừng với mã lỗi ${code}.`));
-    });
-  });
+  return runFileParser(path.join(__dirname, 'src', 'file-worker.js'), { action: 'inspect', filePath });
+}
+
+function parserFileName(source) {
+  return path.basename(source?.path || source?.file || 'file Excel');
+}
+
+async function processFilesInWorker(kind, files) {
+  const results = [], fileErrors = [];
+  for (const source of files) {
+    try {
+      const result = await processSingleFileInWorker(kind, source);
+      results.push({ ...result, sourcePath: source.path });
+    }
+    catch (error) { fileErrors.push({ file: parserFileName(source), message: error.message || String(error) }); }
+  }
+  if (!results.length) {
+    const detail = fileErrors.map(error => `${error.file}: ${error.message}`).join('; ');
+    throw new Error(`Không thể đọc file ${kind === 'warehouse' ? 'Nhập Kho' : 'Excel'}: ${detail}`);
+  }
+  return { ...combineFileResults(kind, results), fileErrors, successfulFiles:results.map(result => result.sourcePath).filter(Boolean) };
 }
 
 function combineFileResults(kind, results) {

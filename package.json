@@ -1,6 +1,6 @@
 {
   "name": "doi-chieu-du-lieu",
-  "version": "1.0.24",
+  "version": "1.0.25",
   "description": "Ứng dụng đối chiếu dữ liệu mua hàng, quét mã và nhập kho",
   "repository": {
     "type": "git",
@@ -13,7 +13,7 @@
     "start:desktop": "electron .",
     "start:web": "node web-server.js",
     "build:web": "node scripts/build-standalone.js",
-    "test": "node --test test/data-audit.test.js test/exporter.test.js test/processor.test.js test/self-check.test.js test/storage.test.js test/ui.test.js",
+    "test": "node --test test/data-audit.test.js test/exporter.test.js test/file-runner.test.js test/processor.test.js test/self-check.test.js test/storage.test.js test/ui.test.js",
     "test:web": "node --test test/web.test.js test/standalone.test.js",
     "verify": "node scripts/self-check.js",
     "check": "node --check main.js && node --check preload.js && node --check src/processor.js && node --check src/file-worker.js && node --check src/exporter.js && node --check src/storage.js && node --check src/data-audit.js && node --check src/self-check.js && node --check renderer/app.js && node --check scripts/self-check.js && node --check scripts/guide-preload.js && node --check scripts/generate-guide-images.js",

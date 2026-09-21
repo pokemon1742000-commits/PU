@@ -128,7 +128,9 @@ async function handleLoad(button){
       const stats=result.loadStats||{};
       const changes=Number.isFinite(stats.added)&&Number.isFinite(stats.updated)
         ? ` · thêm ${stats.added}, cập nhật ${stats.updated}, không đổi ${stats.unchanged||0}`:'';
-      toast(`Đã nạp ${selections.length} file ${labelKind(button.dataset.kind)}${changes}`);
+      const failures=Array.isArray(stats.fileErrors)&&stats.fileErrors.length
+        ? ` · bỏ qua ${stats.fileErrors.length} file lỗi: ${stats.fileErrors.map(error=>`${error.file}: ${error.message}`).join('; ')}`:'';
+      toast(`Đã nạp ${selections.length} file ${labelKind(button.dataset.kind)}${changes}${failures}`,Boolean(failures));
     },null);
   } catch(e){ document.body.style.cursor=''; toast(`Lỗi: ${e.message}`,true); }
 }

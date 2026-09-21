@@ -1,5 +1,5 @@
 const path = require('path');
-const { Worker } = require('worker_threads');
+const { runFileParser } = require('./file-runner');
 const { buildComparison, resolveReview, filterPurchasesByProjectPrefix, prioritizeProjectWarnings, mergePurchaseRows, mergeWarehouseRows, mergeWorkshopRows } = require('./processor');
 const { exportWorkbook } = require('./exporter');
 const { Database } = require('./storage');
@@ -57,8 +57,9 @@ class AppService {
 
   async load(kind, selections) {
     if (!['purchase','scan','warehouse','workshop'].includes(kind)) throw new Error('Loáº¡i file khÃ´ng há»£p lá»‡.');
-    const filePaths = selections.map(selection => selection.path);
+    const selectedPaths = selections.map(selection => selection.path);
     const result = await this.processFilesInWorker(kind, selections);
+    const filePaths = result.successfulFiles || selectedPaths;
     if (kind === 'purchase') {
       const merged = await this.database.mergePurchases(result.rows);
       this.session.purchaseAll = merged.rows;
@@ -86,7 +87,7 @@ class AppService {
     this.session.sources.push(...filePaths.map(file => ({ kind, file:path.basename(file), path:file, loadedAt:new Date().toISOString() })));
     await this.saveWorkingSession();
     this.autoCompareWhenReady();
-    return { ...this.summary(), loadStats:result.stats || { loaded:result.rows.length } };
+    return { ...this.summary(), loadStats:{ ...(result.stats || { loaded:result.rows.length }), fileErrors:result.fileErrors || [] } };
   }
 
   runComparison(settings) {
@@ -172,10 +173,24 @@ class AppService {
   annotatePurchaseReplacements(rows) { const rules = new Map((this.session.purchaseReplacements || []).map(rule => [`${rule.projectCode}|${rule.oldCode}`, rule])); const purchases = new Map((this.session.purchase || []).map(row => [`${String(row.projectCode || '').trim().toUpperCase()}|${String(row.itemCode || '').trim().toUpperCase()}`, row])); return (rows || []).map(row => { const project = String(row.projectCode || '').trim().toUpperCase(), itemCode = String(row.itemCode || '').trim().toUpperCase(), rule = rules.get(`${project}|${itemCode}`); if (!rule) return row; const replacement = purchases.get(`${project}|${rule.newCode}`); return { ...row, replacementCode:rule.newCode, replacementPurchaseOrder:replacement?.purchaseOrder || '' }; }); }
 
   readBuiltInJobCodeReference() { if (!this.builtInJobCodeReference) this.builtInJobCodeReference = this.processFilesInWorker('reference', [{ path:this.builtInJobCodeFile, sheets:['Job code'] }]).then(result => ({ rows:[...new Set(result.rows || [])], details:result.details || [] })).catch(error => { this.builtInJobCodeReference = null; throw new Error(`KhÃ´ng thá»ƒ Ä‘á»c file Job Code máº·c Ä‘á»‹nh: ${error.message}`); }); return this.builtInJobCodeReference; }
-  async processFilesInWorker(kind, files) { const results = []; for (const source of files) results.push(await this.processSingleFileInWorker(kind, source)); return this.combineFileResults(kind, results); }
+  async processFilesInWorker(kind, files) {
+    const results = [], fileErrors = [];
+    for (const source of files) {
+      try {
+        const result = await this.processSingleFileInWorker(kind, source);
+        results.push({ ...result, sourcePath:source.path });
+      }
+      catch (error) { fileErrors.push({ file:path.basename(source?.path || source?.file || 'file Excel'), message:error.message || String(error) }); }
+    }
+    if (!results.length) {
+      const detail = fileErrors.map(error => `${error.file}: ${error.message}`).join('; ');
+      throw new Error(`Không thể đọc file ${kind === 'warehouse' ? 'Nhập Kho' : 'Excel'}: ${detail}`);
+    }
+    return { ...this.combineFileResults(kind, results), fileErrors, successfulFiles:results.map(result => result.sourcePath).filter(Boolean) };
+  }
   processSingleFileInWorker(kind, source) { return this.runWorker({ kind, files:[source] }); }
   inspectFileInWorker(filePath) { return this.runWorker({ action:'inspect', filePath }); }
-  runWorker(workerData) { return new Promise((resolve, reject) => { const worker = new Worker(path.join(this.rootDir, 'src', 'file-worker.js'), { workerData, resourceLimits:{ maxOldGenerationSizeMb:4096 } }); let settled = false; worker.once('message', message => { settled = true; message.ok ? resolve(message.result) : reject(new Error(message.error)); }); worker.once('error', error => { settled = true; reject(error); }); worker.once('exit', code => { if (!settled && code !== 0) reject(new Error(`Tiáº¿n trÃ¬nh Ä‘á»c Excel Ä‘Ã£ dá»«ng vá»›i mÃ£ lá»—i ${code}.`)); }); }); }
+  runWorker(request) { return runFileParser(path.join(this.rootDir, 'src', 'file-worker.js'), request); }
   combineFileResults(kind, results) { if (results.length === 1) return results[0]; const warnings = results.flatMap(result => result.warnings || []); if (kind === 'warehouse') return { rows:mergeWarehouseRows(results.flatMap(result => result.rows || [])), details:results.flatMap(result => result.details || []), warnings }; if (kind === 'workshop') return { rows:mergeWorkshopRows(results.flatMap(result => result.rows || [])), details:results.flatMap(result => result.details || []), warnings }; if (kind !== 'scan') return { rows:results.flatMap(result => result.rows || []), details:results.flatMap(result => result.details || []), warnings }; const groups = new Map(); for (const row of results.flatMap(result => result.rows || [])) { const key = [row.projectCode,row.drawingCode,row.manufacturer,row.scanDate].map(value => String(value || '').trim().toUpperCase()).join('|'), old = groups.get(key); if (!old) { const mergedRowCount = Number(row.mergedRowCount) || 1; groups.set(key, { ...row, mergedRowCount, note:mergedRowCount > 1 ? `Gá»™p ${mergedRowCount} dÃ²ng` : '', scanHistory:[...(row.scanHistory || [])] }); } else { old.quantity += Number(row.quantity) || 0; old.mergedRowCount += Number(row.mergedRowCount) || 1; old.note = old.mergedRowCount > 1 ? `Gá»™p ${old.mergedRowCount} dÃ²ng` : ''; old.scanHistory.push(...(row.scanHistory || [])); if (row.scanDate && (!old.scanDate || row.scanDate > old.scanDate)) old.scanDate = row.scanDate; } } return { rows:[...groups.values()], details:results.flatMap(result => result.details || []), warnings }; }
 }
 

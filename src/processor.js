@@ -52,12 +52,12 @@ async function listWorkbookSheets(file) {
   // style reaches the last row. actualRowCount reflects rows containing values.
   return workbook.worksheets.map(worksheet => ({ name: worksheet.name, rowCount: worksheet.actualRowCount }));
 }
-async function* worksheetRows(worksheet) {
-  for (let rowNo = 1; rowNo <= worksheet.rowCount; rowNo++) {
-    const row = worksheet.getRow(rowNo);
-    if (row.hasValues) yield row;
-  }
+function worksheetRows(worksheet) {
+  const rows = [];
+  worksheet.eachRow({ includeEmpty:false }, row => rows.push(row));
+  return rows;
 }
+
 
 function findHeader(rows, required, max = 30) {
   for (const r of rows.slice(0, max)) {
@@ -67,8 +67,11 @@ function findHeader(rows, required, max = 30) {
   return null;
 }
 function isHeader(row, required) {
-  const names = row.values.map(headerKey);
-  return required.every(group => group.some(x => names.includes(headerKey(x))));
+  return missingHeaderGroups(row, required).length === 0;
+}
+function missingHeaderGroups(row, required) {
+  const names = new Set(row.values.map(headerKey));
+  return required.filter(group => !group.some(name => names.has(headerKey(name))));
 }
 
 function headerMap(header) { return new Map(header.values.map((v, i) => [headerKey(v), i])); }
@@ -126,10 +129,11 @@ async function processPurchases(files) {
     for await (const ws of workbookSheets(file, sheets)) {
       hasSheet = true;
       let header = null, map = null;
-      for await (const excelRow of worksheetRows(ws)) {
+      for (const excelRow of worksheetRows(ws)) {
         const r = rowData(excelRow);
         if (!header) {
-          if (r.rowNo <= 30 && isHeader(r, required)) { header = r; map = headerMap(r); foundHeader = true; }
+          if (r.rowNo > 30) break;
+          if (isHeader(r, required)) { header = r; map = headerMap(r); foundHeader = true; }
           continue;
         }
         const purchaseOrder = clean(getBy(map, r.values, ['Mã hàng']));
@@ -226,7 +230,7 @@ async function processScans(files) {
       let currentScanMarker = null;
       let firstMarkerSeen = false;
       const pendingBeforeFirstMarker = [];
-      for await (const excelRow of worksheetRows(ws)) {
+      for (const excelRow of worksheetRows(ws)) {
         const r = rowData(excelRow);
         let rowCells = r.values.map(cellValue).map(clean);
         while (rowCells.length && clean(rowCells[0]) === '') rowCells.shift();
@@ -298,10 +302,11 @@ async function processWarehouse(files) {
     for await (const ws of workbookSheets(file, sheets)) {
       hasSheet = true;
       let header = null, map = null;
-      for await (const excelRow of worksheetRows(ws)) {
+      for (const excelRow of worksheetRows(ws)) {
         const r = rowData(excelRow);
         if (!header) {
-          if (r.rowNo <= 30 && isHeader(r, required)) { header = r; map = headerMap(r); foundHeader = true; }
+          if (r.rowNo > 30) break;
+          if (isHeader(r, required)) { header = r; map = headerMap(r); foundHeader = true; }
           continue;
         }
         const row = Object.fromEntries(Object.entries(cols).map(([k, names]) => [k, cellValue(getBy(map, r.values, names))]));
@@ -317,7 +322,10 @@ async function processWarehouse(files) {
       }
     }
     if (!hasSheet) throw new Error(`File ${basename(sourceName || file)} không có sheet dữ liệu.`);
-    if (!foundHeader) throw new Error(`${basename(sourceName || file)}: không tìm thấy đủ các cột Nhập Kho trong 30 dòng đầu của bất kỳ sheet nào.`);
+    if (!foundHeader) {
+      const requiredLabels = required.map(group => group.join(' / ')).join(', ');
+      throw new Error(`${basename(sourceName || file)}: không tìm thấy đủ các cột Nhập Kho (${requiredLabels}) trong 30 dòng đầu của bất kỳ sheet nào.`);
+    }
   }
   const rows = mergeWarehouseRows(out.filter(row => row.projectCode));
   return { rows, details: out.map(row => ({ ...row, mergedRowCount: 1, note: '' })), warnings };
@@ -331,11 +339,12 @@ async function processWorkshop(files) {
     for await (const ws of workbookSheets(file, sheets)) {
       hasSheet = true;
       let headerRow = 0;
-      for await (const excelRow of worksheetRows(ws)) {
+      for (const excelRow of worksheetRows(ws)) {
         const r = rowData(excelRow);
         if (!headerRow) {
+          if (r.rowNo > 30) break;
           const names = r.values.map(headerKey);
-          if (r.rowNo <= 30 && names[2] === 'STT' && names[3] === 'MKS' && names[4] === 'MA HANG' && names[5] === 'TEN HANG') {
+          if (names[2] === 'STT' && names[3] === 'MKS' && names[4] === 'MA HANG' && names[5] === 'TEN HANG') {
             headerRow = r.rowNo;
             foundHeader = true;
           }
@@ -471,10 +480,11 @@ async function processReference(source) {
   for await (const ws of workbookSheets(file, sheets)) {
     let candidateHeader = null, candidateMap = null;
     const rows = [], details = [];
-    for await (const excelRow of worksheetRows(ws)) {
+    for (const excelRow of worksheetRows(ws)) {
       const r = rowData(excelRow);
       if (!candidateHeader) {
-        if (r.rowNo <= 30 && isHeader(r, [['Code']])) { candidateHeader = r; candidateMap = headerMap(r); }
+        if (r.rowNo > 30) break;
+        if (isHeader(r, [['Code']])) { candidateHeader = r; candidateMap = headerMap(r); }
         continue;
       }
       const code = norm(getBy(candidateMap, r.values, ['Code']));

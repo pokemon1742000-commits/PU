@@ -4,17 +4,21 @@ const fs = require('fs/promises');
 const path = require('path');
 const os = require('os');
 const ExcelJS = require('exceljs');
-const { Worker } = require('worker_threads');
+const { runFileParser } = require('../src/file-runner');
 const { processFiles, listWorkbookSheets, parseUsDate, parseDmyDate, parseScanMarker, projectCode, buildComparison, resolveReview, validateProjectCodes, filterPurchasesByProjectPrefix, prioritizeProjectWarnings, mergePurchaseRows, mergeWarehouseRows, quantityComparisonNote } = require('../src/processor');
 
-function processWithWorker(kind, file, sheets) {
-  return new Promise((resolve, reject) => {
-    const workerData = sheets ? { kind, files:[{ path:file, sheets }] } : { kind, filePaths:[file] };
-    const worker = new Worker(path.join(__dirname, '..', 'src', 'file-worker.js'), { workerData });
-    worker.once('message', message => message.ok ? resolve(message.result) : reject(new Error(message.error)));
-    worker.once('error', reject);
-  });
+const parserEntry = path.join(__dirname, '..', 'src', 'file-worker.js');
+
+function runScriptWithParser(script, options = {}) {
+  const file = path.join(os.tmpdir(), `parser-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.js`);
+  return fs.writeFile(file, script).then(() => runFileParser(file, {}, options)).finally(() => fs.rm(file, { force:true }));
 }
+
+function processWithWorker(kind, file, sheets) {
+  const request = sheets ? { kind, files:[{ path:file, sheets }] } : { kind, filePaths:[file] };
+  return runFileParser(parserEntry, request);
+}
+
 
 test('parses scan marker and normalizes warehouse dates as DD/MM/YYYY', () => {
   assert.equal(parseUsDate('8/15/2026'), '2026-08-15');
@@ -617,6 +621,22 @@ test('isolated Excel parsers run sequentially', async t => {
   assert.equal(result.rows[0].note, 'Gộp 2 dòng');
   assert.equal(result.rows[0].scanDate, '2026-08-15');
   assert.equal(result.rows[0].reference, 'MKAC-1');
+ });
+
+ await t.test('imports a formatted warehouse workbook without scanning empty formatted rows', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'warehouse-formatted-range-'));
+  t.after(() => fs.rm(dir, { recursive:true, force:true }));
+  const file = path.join(dir, 'formatted-warehouse.xlsx');
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Data');
+  ws.addRow(['Tên dự án','Mã Hàng','Tên Hàng','NCC','Số lượng đặt hàng','Hạn giao hàng','Ngày giao hàng','Số lượng đã về']);
+  ws.addRow(['MEC260901','ITEM-01','Motor','NCC',4,'01/09/2026','02/09/2026',3]);
+  ws.getCell('A1048576').font = { bold:true };
+  await wb.xlsx.writeFile(file);
+  const result = await processWithWorker('warehouse', file);
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].itemCode, 'ITEM-01');
+  assert.equal(result.rows[0].receivedQuantity, 3);
  });
 
  await t.test('reads and reconciles every data sheet instead of only the first sheet', async t => {
