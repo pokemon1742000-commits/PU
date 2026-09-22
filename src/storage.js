@@ -23,6 +23,15 @@ function text(value) { return String(value ?? '').trim(); }
 function norm(value) { return text(value).toUpperCase(); }
 function jsonEqual(a, b) { return JSON.stringify(a ?? null) === JSON.stringify(b ?? null); }
 
+class DatabaseRecoveryRequiredError extends Error {
+  constructor(dbFile) {
+    super('Cơ sở dữ liệu SQLite bị hỏng và không có backup hợp lệ để khôi phục.');
+    this.name = 'DatabaseRecoveryRequiredError';
+    this.code = 'DATABASE_CORRUPT_NO_BACKUP';
+    this.dbFile = dbFile;
+  }
+}
+
 class Database {
   constructor(dir) {
     this.dir = dir;
@@ -33,6 +42,7 @@ class Database {
     this.archiveManifestFile = path.join(dir, 'source-archives.json');
     this.closed = false;
     this.db = null;
+    this.recoveryRequired = false;
   }
 
   async init() {
@@ -52,7 +62,8 @@ class Database {
       if (!(await this.exists(this.dbFile))) await this.migrateLegacyFiles();
     } else if (!(await this.isValidDatabase(this.dbFile))) {
       if (!(await this.restoreNewestBackup())) {
-        throw new Error('Cơ sở dữ liệu SQLite bị hỏng và không có backup hợp lệ để khôi phục.');
+        this.recoveryRequired = true;
+        throw new DatabaseRecoveryRequiredError(this.dbFile);
       }
     }
     this.open();
@@ -95,6 +106,33 @@ class Database {
       return true;
     }
     return false;
+  }
+
+  async quarantineCorruptDatabase() {
+    if (!this.recoveryRequired) throw new Error('Không có yêu cầu khôi phục cơ sở dữ liệu đang chờ xử lý.');
+    if (this.db && !this.closed) throw new Error('Phải đóng cơ sở dữ liệu trước khi cô lập file bị hỏng.');
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    let recoveryDir = path.join(this.dir, `corrupt-database-${stamp}`);
+    let suffix = 1;
+    while (await this.exists(recoveryDir)) recoveryDir = path.join(this.dir, `corrupt-database-${stamp}-${suffix++}`);
+    await fs.mkdir(recoveryDir, { recursive:true });
+    const names = (await fs.readdir(this.dir)).filter(name => name === 'app.sqlite' || name.startsWith('app.sqlite-') || name.startsWith('app.sqlite.'));
+    const moved = [];
+    for (const name of names) {
+      const source = path.join(this.dir, name);
+      const target = path.join(recoveryDir, name);
+      await fs.rename(source, target);
+      moved.push(name);
+    }
+    this.recoveryRequired = false;
+    return { recoveryDir, files:moved };
+  }
+
+  async createFreshDatabaseAfterRecovery() {
+    const recovery = await this.quarantineCorruptDatabase();
+    this.open();
+    this.ensureSchema();
+    return recovery;
   }
 
   open() {
@@ -518,4 +556,4 @@ class Database {
   }
 }
 
-module.exports = { Database, SCHEMA_VERSION };
+module.exports = { Database, DatabaseRecoveryRequiredError, SCHEMA_VERSION };

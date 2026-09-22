@@ -189,6 +189,13 @@ test('application information dialog shows version-specific improvements and the
   assert.match(main, /appVersion: app\.getVersion\(\)/);
   assert.match(main, /app\.requestSingleInstanceLock\(\)/);
   assert.match(main, /showErrorBox/);
+  assert.match(main, /DATABASE_CORRUPT_NO_BACKUP/);
+  assert.match(main, /showMessageBoxSync/);
+  assert.match(main, /Tạo database mới/);
+  assert.match(main, /defaultId:1/);
+  assert.match(main, /cancelId:1/);
+  assert.match(main, /createFreshDatabaseAfterRecovery/);
+  assert.match(main, /không có backup hợp lệ/);
   assert.match(main, /ipcMain\.handle\('external:open'/);
   assert.match(main, /shell\.openExternal\(url\)/);
 });

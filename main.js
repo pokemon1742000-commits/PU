@@ -57,6 +57,20 @@ function createWindow() {
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 }
 
+async function initializeApplication() {
+  database = database || new Database(path.join(app.getPath('userData'), 'data'));
+  await database.init();
+  const [purchaseAll, purchaseDetails, purchaseReplacements, scans, scanDetails, warehouse, warehouseDetails, workshop, workshopDetails, workingSession, jobCodeReference] = await Promise.all([
+    database.readPurchases(), database.readRawPurchases(), database.readPurchaseReplacements(),
+    database.readScans(), database.readRawScans(), database.readWarehouse(), database.readRawWarehouse(),
+    database.readWorkshop(), database.readRawWorkshop(), database.readWorkingSession(), readBuiltInJobCodeReference()
+  ]);
+  applyThresholdSettings(workingSession);
+  session = sessionWithBuiltInJobCodes({ ...session, purchaseAll, purchaseDetails, purchaseReplacements, scans, scanDetails, warehouse, warehouseDetails, workshop, workshopDetails, formatWarnings:workingSession.formatWarnings || [], sources:workingSession.sources || [], decisions:new Map(workingSession.decisions || []) }, jobCodeReference);
+  refreshValidatedSession();
+  autoCompareWhenReady();
+}
+
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
   app.quit();
@@ -69,22 +83,39 @@ if (!gotSingleInstanceLock) {
   });
   app.whenReady().then(async () => {
     Menu.setApplicationMenu(null);
-    database = new Database(path.join(app.getPath('userData'), 'data'));
-    await database.init();
-    const [purchaseAll, purchaseDetails, purchaseReplacements, scans, scanDetails, warehouse, warehouseDetails, workshop, workshopDetails, workingSession, jobCodeReference] = await Promise.all([
-      database.readPurchases(), database.readRawPurchases(), database.readPurchaseReplacements(),
-      database.readScans(), database.readRawScans(), database.readWarehouse(), database.readRawWarehouse(),
-      database.readWorkshop(), database.readRawWorkshop(), database.readWorkingSession(), readBuiltInJobCodeReference()
-    ]);
-    applyThresholdSettings(workingSession);
-    session = sessionWithBuiltInJobCodes({ ...session, purchaseAll, purchaseDetails, purchaseReplacements, scans, scanDetails, warehouse, warehouseDetails, workshop, workshopDetails, formatWarnings:workingSession.formatWarnings || [], sources:workingSession.sources || [], decisions:new Map(workingSession.decisions || []) }, jobCodeReference);
-    refreshValidatedSession();
-    autoCompareWhenReady();
+    await initializeApplication();
     configureAutoUpdater();
     registerIpc();
     createWindow();
     app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow());
   }).catch(async error => {
+    if (error?.code === 'DATABASE_CORRUPT_NO_BACKUP') {
+      const choice = dialog.showMessageBoxSync({
+        type:'warning',
+        buttons:['Tạo database mới','Thoát'],
+        defaultId:1,
+        cancelId:1,
+        title:'Không thể khôi phục dữ liệu',
+        message:'Cơ sở dữ liệu SQLite bị hỏng và không có backup hợp lệ.',
+        detail:'Ứng dụng sẽ giữ nguyên file bị hỏng để bạn có thể phục hồi thủ công. Tạo database mới sẽ mở ứng dụng với dữ liệu trống và không khôi phục được dữ liệu cũ.'
+      });
+      if (choice === 0) {
+        try {
+          await database.createFreshDatabaseAfterRecovery();
+          await initializeApplication();
+          configureAutoUpdater();
+          registerIpc();
+          createWindow();
+          app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow());
+          return;
+        } catch (recoveryError) {
+          error = recoveryError;
+        }
+      } else {
+        app.quit();
+        return;
+      }
+    }
     try { await database?.close(); } finally {
       dialog.showErrorBox('Không thể khởi động ứng dụng', error.message || String(error));
       app.quit();

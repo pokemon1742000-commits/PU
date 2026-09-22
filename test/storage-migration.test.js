@@ -93,6 +93,27 @@ test('missing database fails instead of starting empty when all snapshots are in
   await assert.rejects(() => db.init(), /backup hợp lệ để khôi phục|cơ sở dữ liệu SQLite hợp lệ/);
 });
 
+test('corrupt database requires explicit recovery and preserves damaged files', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sqlite-corrupt-'));
+  t.after(() => fs.rm(dir, { recursive:true, force:true }));
+  const damaged = 'not sqlite data';
+  await fs.writeFile(path.join(dir, 'app.sqlite'), damaged, 'utf8');
+  await fs.writeFile(path.join(dir, 'app.sqlite-wal'), 'wal bytes', 'utf8');
+  await fs.mkdir(path.join(dir, 'backups'), { recursive:true });
+  await fs.writeFile(path.join(dir, 'backups', 'data-broken.sqlite'), 'not sqlite backup', 'utf8');
+  const db = new Database(dir);
+  await assert.rejects(() => db.init(), error => error.code === 'DATABASE_CORRUPT_NO_BACKUP');
+  assert.equal(await fs.readFile(path.join(dir, 'app.sqlite'), 'utf8'), damaged);
+  const recovery = await db.createFreshDatabaseAfterRecovery();
+  assert.deepEqual((await fs.readdir(recovery.recoveryDir)).sort(), ['app.sqlite', 'app.sqlite-shm', 'app.sqlite-wal']);
+  assert.equal(await fs.readFile(path.join(recovery.recoveryDir, 'app.sqlite'), 'utf8'), damaged);
+  assert.equal(await fs.readFile(path.join(recovery.recoveryDir, 'app.sqlite-wal'), 'utf8'), 'wal bytes');
+  assert.deepEqual(await db.readPurchases(), []);
+  const fresh = new DatabaseDriver(path.join(dir, 'app.sqlite'));
+  try { assert.equal(fresh.pragma('integrity_check', { simple:true }), 'ok'); } finally { fresh.close(); }
+  await db.close();
+});
+
 test('ambiguous legacy warehouse PO candidates preserve the existing row', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sqlite-warehouse-ambiguous-'));
   const db = new Database(dir);
