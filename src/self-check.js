@@ -92,8 +92,9 @@ async function runSelfCheck(options = {}) {
 
   await check('database', 'Lưu và cập nhật cơ sở dữ liệu tạm', async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'doi-chieu-self-check-'));
+    let database;
     try {
-      const database = new Database(tempDir);
+      database = new Database(tempDir);
       await database.init();
       const first = await database.mergePurchases([{ projectCode:'AUT-DB', purchaseOrder:'PR-DB', itemCode:'PART-004', quantity:1 }]);
       const second = await database.mergePurchases([{ projectCode:'AUT-DB', purchaseOrder:'PR-DB', itemCode:'PART-004', quantity:2 }]);
@@ -103,6 +104,7 @@ async function runSelfCheck(options = {}) {
       assert(workshop.stats.added === 1 && (await database.readWorkshop()).length === 1, 'Không lưu được dữ liệu Xưởng Gia Công');
       return 'Thêm/cập nhật Mua Hàng và lưu XGC thành công';
     } finally {
+      if (database) await database.close();
       await fs.rm(tempDir, { recursive:true, force:true });
     }
   });

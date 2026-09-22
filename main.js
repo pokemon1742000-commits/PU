@@ -1,6 +1,10 @@
 const { app, BrowserWindow, dialog, ipcMain, shell, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs/promises');
+const fileSystem = require('fs');
+const https = require('https');
+const crypto = require('crypto');
+const { spawn } = require('child_process');
 const { runFileParser } = require('./src/file-runner');
 const { autoUpdater } = require('electron-updater');
 const { buildComparison, resolveReview, filterPurchasesByProjectPrefix, prioritizeProjectWarnings, mergePurchaseRows, mergeWarehouseRows, mergeWorkshopRows } = require('./src/processor');
@@ -8,13 +12,16 @@ const { exportWorkbook, EXPORT_TYPES } = require('./src/exporter');
 const { Database } = require('./src/storage');
 const { runSelfCheck } = require('./src/self-check');
 const { auditSessionData, searchLoadedCode } = require('./src/data-audit');
+const { REPOSITORY, selectPreviousRelease, selectInstallerAsset } = require('./src/update-release');
 
 let win;
 let session = emptySession();
 let database;
+let isQuitting = false;
 let comparisonThreshold = 91;
 let confirmationThreshold = 90;
-let updateState = { status:'idle', message:'Sẵn sàng kiểm tra cập nhật', percent:0, currentVersion:app.getVersion() };
+let mutationQueue = Promise.resolve();
+let updateState = { status:'idle', operation:'update', message:'Sẵn sàng kiểm tra cập nhật', percent:0, currentVersion:app.getVersion() };
 const DEFAULT_PAGE_SIZE = 100;
 const BUILT_IN_JOB_CODE_FILE = path.join(app.isPackaged ? process.resourcesPath : __dirname, 'assets', 'MKAC Monthly Timesheet.xlsx');
 let builtInJobCodeReference;
@@ -23,6 +30,19 @@ app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096');
 
 function emptySession() {
   return { purchase: [], purchaseAll: [], purchaseDetails: [], purchaseReplacements: [], scans: [], scanDetails: [], warehouse: [], warehouseDetails: [], workshop: [], workshopDetails: [], comparisonWarehouse: [], comparison: [], dataAudit: [], review: [], warnings: [], formatWarnings: [], jobCodes: [], jobCodeDetails: [], jobCodeNotes: new Map(), decisions: new Map(), sources: [] };
+}
+
+function serializeMutation(task) {
+  const next = mutationQueue.then(task, task);
+  mutationQueue = next.catch(() => {});
+  return next;
+}
+
+function applyThresholdSettings(settings = {}) {
+  const auto = Number(settings.autoThreshold);
+  comparisonThreshold = Number.isFinite(auto) && auto > 0 ? Math.min(auto, 100) : 91;
+  const confirmation = Number(settings.confirmationThreshold);
+  confirmationThreshold = Math.max(0, Math.min(Number.isFinite(confirmation) ? confirmation : 90, comparisonThreshold - 1));
 }
 
 function createWindow() {
@@ -37,22 +57,45 @@ function createWindow() {
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 }
 
-app.whenReady().then(async () => {
-  Menu.setApplicationMenu(null);
-  database = new Database(path.join(app.getPath('userData'), 'data'));
-  await database.init();
-  const [purchaseAll, purchaseDetails, purchaseReplacements, scans, scanDetails, warehouse, warehouseDetails, workshop, workshopDetails, workingSession, jobCodeReference] = await Promise.all([
-    database.readPurchases(), database.readRawPurchases(), database.readPurchaseReplacements(),
-    database.readScans(), database.readRawScans(), database.readWarehouse(), database.readRawWarehouse(),
-    database.readWorkshop(), database.readRawWorkshop(), database.readWorkingSession(), readBuiltInJobCodeReference()
-  ]);
-  session = sessionWithBuiltInJobCodes({ ...session, purchaseAll, purchaseDetails, purchaseReplacements, scans, scanDetails, warehouse, warehouseDetails, workshop, workshopDetails, formatWarnings:workingSession.formatWarnings || [], sources:workingSession.sources || [], decisions:new Map(workingSession.decisions || []) }, jobCodeReference);
-  refreshValidatedSession();
-  autoCompareWhenReady();
-  configureAutoUpdater();
-  registerIpc();
-  createWindow();
-  app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow());
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!win || win.isDestroyed()) return;
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  });
+  app.whenReady().then(async () => {
+    Menu.setApplicationMenu(null);
+    database = new Database(path.join(app.getPath('userData'), 'data'));
+    await database.init();
+    const [purchaseAll, purchaseDetails, purchaseReplacements, scans, scanDetails, warehouse, warehouseDetails, workshop, workshopDetails, workingSession, jobCodeReference] = await Promise.all([
+      database.readPurchases(), database.readRawPurchases(), database.readPurchaseReplacements(),
+      database.readScans(), database.readRawScans(), database.readWarehouse(), database.readRawWarehouse(),
+      database.readWorkshop(), database.readRawWorkshop(), database.readWorkingSession(), readBuiltInJobCodeReference()
+    ]);
+    applyThresholdSettings(workingSession);
+    session = sessionWithBuiltInJobCodes({ ...session, purchaseAll, purchaseDetails, purchaseReplacements, scans, scanDetails, warehouse, warehouseDetails, workshop, workshopDetails, formatWarnings:workingSession.formatWarnings || [], sources:workingSession.sources || [], decisions:new Map(workingSession.decisions || []) }, jobCodeReference);
+    refreshValidatedSession();
+    autoCompareWhenReady();
+    configureAutoUpdater();
+    registerIpc();
+    createWindow();
+    app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow());
+  }).catch(async error => {
+    try { await database?.close(); } finally {
+      dialog.showErrorBox('Không thể khởi động ứng dụng', error.message || String(error));
+      app.quit();
+    }
+  });
+}
+app.on('before-quit', async event => {
+  if (isQuitting) return;
+  isQuitting = true;
+  event.preventDefault();
+  try { await database?.close(); } finally { app.quit(); }
 });
 app.on('window-all-closed', () => process.platform !== 'darwin' && app.quit());
 
@@ -72,13 +115,14 @@ function registerIpc() {
     return true;
   });
   ipcMain.handle('update:check', async () => {
-    if (!app.isPackaged) return setUpdateState({ status:'development', message:'Chức năng Update chỉ hoạt động trên bản đã cài đặt.' });
-    if (['checking','downloading','installing'].includes(updateState.status)) return updateState;
-    setUpdateState({ status:'checking', message:'Đang kiểm tra bản cập nhật...', percent:0 });
+    if (!app.isPackaged) return setUpdateState({ status:'development', operation:'update', message:'Chức năng Update chỉ hoạt động trên bản đã cài đặt.' });
+    if (['checking','downloading','installing','rollback-checking','rollback-downloading','rollback-installing'].includes(updateState.status)) return updateState;
+    setUpdateState({ status:'checking', operation:'update', message:'Đang kiểm tra bản cập nhật...', percent:0 });
     try { await autoUpdater.checkForUpdates(); }
-    catch (error) { setUpdateState({ status:'error', message:`Không thể kiểm tra cập nhật: ${error.message}` }); }
+    catch (error) { setUpdateState({ status:'error', operation:'update', message:`Không thể kiểm tra cập nhật: ${error.message}` }); }
     return updateState;
   });
+  ipcMain.handle('update:rollback', async () => rollbackPreviousVersion());
   ipcMain.handle('files:pick', async (_e, kind) => {
     if (!['purchase', 'scan', 'warehouse', 'workshop'].includes(kind)) throw new Error('Loại file không được phép nạp thủ công.');
     const result = await dialog.showOpenDialog(win, {
@@ -93,20 +137,20 @@ function registerIpc() {
     }
     return { canceled: false, files };
   });
-  ipcMain.handle('files:load', async (_e, kind, selections) => load(kind, selections));
+  ipcMain.handle('files:load', async (_e, kind, selections) => serializeMutation(() => load(kind, selections)));
   ipcMain.handle('comparison:run', async (_e, settings) => {
     const autoThreshold = typeof settings === 'object' ? settings.autoThreshold : settings;
     const confirmThreshold = typeof settings === 'object' ? settings.confirmationThreshold : confirmationThreshold;
     runComparison(Number(autoThreshold) || 91, Number(confirmThreshold));
-    return summary();
+    return saveWorkingSession().then(() => summary());
   });
-  ipcMain.handle('review:resolve', async (_e, payload) => {
+  ipcMain.handle('review:resolve', async (_e, payload) => serializeMutation(async () => {
     const out = resolveReview(session, payload);
     Object.assign(session, out);
     await saveWorkingSession();
     return summary();
-  });
-  ipcMain.handle('purchase-replacement:save', async (_e, payload) => {
+  }));
+  ipcMain.handle('purchase-replacement:save', async (_e, payload) => serializeMutation(async () => {
     const projectCodes = [...new Set(String(payload?.projectCode || '').split(',').map(value => value.trim().toUpperCase()).filter(Boolean))];
     const oldCode = String(payload?.oldCode || '').trim().toUpperCase();
     const newCode = String(payload?.newCode || '').trim().toUpperCase();
@@ -120,14 +164,14 @@ function registerIpc() {
     for (const projectCode of projectCodes) session.purchaseReplacements = await database.savePurchaseReplacement(projectCode, oldCode, newCode);
     autoCompareWhenReady();
     return summary();
-  });
-  ipcMain.handle('purchase-replacement:delete', async (_e, payload) => {
+  }));
+  ipcMain.handle('purchase-replacement:delete', async (_e, payload) => serializeMutation(async () => {
     session.purchaseReplacements = await database.deletePurchaseReplacement(payload?.projectCode, payload?.oldCode);
     autoCompareWhenReady();
     return summary();
-  });
+  }));
   ipcMain.handle('data:rows', (_e, name, options) => rowsFor(name, options));
-  ipcMain.handle('session:clear', async () => {
+  ipcMain.handle('session:clear', async () => serializeMutation(async () => {
     await database.clearWorkingSession();
     const [purchaseAll, purchaseDetails, purchaseReplacements, warehouse, warehouseDetails, workshop, workshopDetails, workingSession, jobCodeReference] = await Promise.all([
       database.readPurchases(), database.readRawPurchases(), database.readPurchaseReplacements(),
@@ -136,8 +180,8 @@ function registerIpc() {
     session = sessionWithBuiltInJobCodes({ ...emptySession(), purchaseAll, purchaseDetails, purchaseReplacements, warehouse, warehouseDetails, workshop, workshopDetails, formatWarnings:workingSession.formatWarnings || [], sources:workingSession.sources || [] }, jobCodeReference);
     refreshValidatedSession();
     return summary();
-  });
-  ipcMain.handle('database:delete', async (_e, keyword) => {
+  }));
+  ipcMain.handle('database:delete', async (_e, keyword) => serializeMutation(async () => {
     if (keyword !== 'XÓA') throw new Error('Từ khóa xác nhận không đúng.');
     await database.backupAndClear();
     const [purchaseDetails, jobCodeReference] = await Promise.all([
@@ -146,7 +190,21 @@ function registerIpc() {
     session = sessionWithBuiltInJobCodes({ ...emptySession(), purchaseDetails }, jobCodeReference);
     refreshValidatedSession();
     return summary();
-  });
+  }));
+  ipcMain.handle('database:backups', async () => database.listBackups());
+  ipcMain.handle('database:restore', async (_e, fileName) => serializeMutation(async () => {
+    await database.restoreBackup(fileName);
+    const [purchaseAll, purchaseDetails, purchaseReplacements, scans, scanDetails, warehouse, warehouseDetails, workshop, workshopDetails, workingSession, jobCodeReference] = await Promise.all([
+      database.readPurchases(), database.readRawPurchases(), database.readPurchaseReplacements(),
+      database.readScans(), database.readRawScans(), database.readWarehouse(), database.readRawWarehouse(),
+      database.readWorkshop(), database.readRawWorkshop(), database.readWorkingSession(), readBuiltInJobCodeReference()
+    ]);
+    applyThresholdSettings(workingSession);
+    session = sessionWithBuiltInJobCodes({ ...session, purchaseAll, purchaseDetails, purchaseReplacements, scans, scanDetails, warehouse, warehouseDetails, workshop, workshopDetails, formatWarnings:workingSession.formatWarnings || [], sources:workingSession.sources || [], decisions:new Map(workingSession.decisions || []) }, jobCodeReference);
+    refreshValidatedSession();
+    autoCompareWhenReady();
+    return summary();
+  }));
   ipcMain.handle('export:save', async (_e, sheetNames) => {
     const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
     const list = Array.isArray(sheetNames) ? sheetNames.map(String) : [];
@@ -360,7 +418,13 @@ function autoCompareWhenReady() {
 }
 
 function saveWorkingSession() {
-  return database.writeWorkingSession({ sources:session.sources, formatWarnings:session.formatWarnings, decisions:[...(session.decisions || new Map()).entries()] });
+  return database.writeWorkingSession({
+    sources:session.sources,
+    formatWarnings:session.formatWarnings,
+    decisions:[...(session.decisions || new Map()).entries()],
+    autoThreshold:comparisonThreshold,
+    confirmationThreshold
+  });
 }
 
 function jobNotesFromDetails(rows) {
@@ -394,6 +458,113 @@ function setUpdateState(patch) {
   return updateState;
 }
 
+function fetchJson(url) {
+  return new Promise((resolve, reject) => {
+    const request = https.get(url, { headers:{ Accept:'application/vnd.github+json', 'User-Agent':'doi-chieu-du-lieu' } }, response => {
+      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+        response.resume();
+        return fetchJson(response.headers.location).then(resolve, reject);
+      }
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', chunk => { body += chunk; });
+      response.on('end', () => {
+        if (response.statusCode !== 200) return reject(new Error(`GitHub trả về HTTP ${response.statusCode}.`));
+        try { resolve(JSON.parse(body)); } catch { reject(new Error('GitHub trả về dữ liệu không hợp lệ.')); }
+      });
+    });
+    request.on('error', reject);
+    request.setTimeout(20000, () => request.destroy(new Error('Kết nối GitHub quá thời gian.')));
+  });
+}
+
+function downloadFile(url, target, onProgress) {
+  return new Promise((resolve, reject) => {
+    const output = fileSystem.createWriteStream(target);
+    const request = https.get(url, { headers:{ Accept:'application/octet-stream', 'User-Agent':'doi-chieu-du-lieu' } }, response => {
+      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+        response.resume();
+        output.close();
+        return downloadFile(response.headers.location, target, onProgress).then(resolve, reject);
+      }
+      if (response.statusCode !== 200) {
+        response.resume();
+        output.close();
+        return reject(new Error(`Không thể tải bộ cài (HTTP ${response.statusCode}).`));
+      }
+      const total = Number(response.headers['content-length']) || 0;
+      let received = 0;
+      response.on('data', chunk => {
+        received += chunk.length;
+        onProgress(total ? Math.round(received / total * 100) : 0);
+      });
+      response.pipe(output);
+      output.on('finish', async () => {
+        output.close();
+        try {
+          const stat = await fs.stat(target);
+          if (!stat.size) throw new Error('Bộ cài tải xuống rỗng.');
+          resolve(target);
+        } catch (error) { reject(error); }
+      });
+    });
+    request.on('error', error => { output.destroy(); reject(error); });
+    request.setTimeout(120000, () => request.destroy(new Error('Tải bộ cài quá thời gian.')));
+  });
+}
+
+async function verifyDownloadedAsset(filePath, asset) {
+  const digest = String(asset?.digest || '');
+  if (!digest) return;
+  const match = digest.match(/^sha256:([a-f0-9]{64})$/i);
+  if (!match) throw new Error('GitHub trả về checksum bộ cài không được hỗ trợ.');
+  const hash = crypto.createHash('sha256');
+  const input = fileSystem.createReadStream(filePath);
+  await new Promise((resolve, reject) => {
+    input.on('data', chunk => hash.update(chunk));
+    input.on('error', reject);
+    input.on('end', resolve);
+  });
+  if (hash.digest('hex').toLowerCase() !== match[1].toLowerCase()) throw new Error('Checksum bộ cài không khớp với release GitHub.');
+}
+
+async function rollbackPreviousVersion() {
+  if (!app.isPackaged) return setUpdateState({ status:'development', operation:'rollback', message:'Chức năng Restore chỉ hoạt động trên bản đã cài đặt.' });
+  if (['checking','downloading','installing','rollback-checking','rollback-downloading','rollback-installing'].includes(updateState.status)) return updateState;
+  const temporaryFile = path.join(app.getPath('temp'), `doi-chieu-restore-${Date.now()}.exe`);
+  setUpdateState({ status:'rollback-checking', operation:'rollback', message:'Đang tìm bản stable ngay trước latest trên GitHub...', percent:0 });
+  try {
+    const releases = await fetchJson(`https://api.github.com/repos/${REPOSITORY.owner}/${REPOSITORY.name}/releases?per_page=30`);
+    const selection = selectPreviousRelease(releases, app.getVersion());
+    if (!selection.previous) {
+      return setUpdateState({ status:'rollback-unavailable', operation:'rollback', latestVersion:selection.latest?.version || '', targetVersion:'', message:'Không tìm thấy bản stable trước latest phù hợp để khôi phục.' });
+    }
+    const asset = selectInstallerAsset(selection.previous);
+    if (!asset) throw new Error(`Bản ${selection.previous.version} không có bộ cài Setup hợp lệ.`);
+    setUpdateState({ status:'rollback-downloading', operation:'rollback', latestVersion:selection.latest.version, targetVersion:selection.previous.version, message:`Đang tải bộ cài bản ${selection.previous.version}...`, percent:0 });
+    await downloadFile(asset.browser_download_url, temporaryFile, percent => setUpdateState({ status:'rollback-downloading', operation:'rollback', latestVersion:selection.latest.version, targetVersion:selection.previous.version, percent, message:`Đang tải Restore ${percent}%` }));
+    await verifyDownloadedAsset(temporaryFile, asset);
+    const choice = dialog.showMessageBoxSync(win, {
+      type:'warning', buttons:['Cài bản Restore và khởi động lại','Để sau'], defaultId:1, cancelId:1,
+      title:'Khôi phục phiên bản ứng dụng',
+      message:`Khôi phục từ v${app.getVersion()} về v${selection.previous.version}?`,
+      detail:`Latest trên GitHub hiện là v${selection.latest.version}. Restore sẽ cài bản stable ngay trước latest, không xóa dữ liệu SQLite, rồi đóng ứng dụng để chạy bộ cài.`
+    });
+    if (choice !== 0) {
+      await fs.rm(temporaryFile, { force:true });
+      return setUpdateState({ status:'idle', operation:'rollback', targetVersion:selection.previous.version, latestVersion:selection.latest.version, message:'Đã hủy khôi phục phiên bản.' });
+    }
+    setUpdateState({ status:'rollback-installing', operation:'rollback', latestVersion:selection.latest.version, targetVersion:selection.previous.version, message:`Đang cài bản Restore v${selection.previous.version}...`, percent:100 });
+    const child = spawn(temporaryFile, ['/S'], { detached:true, stdio:'ignore', windowsHide:true });
+    child.unref();
+    setTimeout(() => app.quit(), 250);
+    return updateState;
+  } catch (error) {
+    await fs.rm(temporaryFile, { force:true }).catch(() => {});
+    return setUpdateState({ status:'error', operation:'rollback', message:`Restore thất bại: ${error.message}`, percent:0 });
+  }
+}
+
 function configureAutoUpdater() {
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
@@ -405,8 +576,18 @@ function configureAutoUpdater() {
   autoUpdater.on('update-not-available', info => setUpdateState({ status:'current', message:`Đang dùng bản mới nhất (${info.version || app.getVersion()}).`, availableVersion:'' }));
   autoUpdater.on('download-progress', progress => setUpdateState({ status:'downloading', message:`Đang tải cập nhật ${Math.round(progress.percent)}%`, percent:Math.round(progress.percent) }));
   autoUpdater.on('update-downloaded', info => {
-    setUpdateState({ status:'installing', message:`Đã tải bản ${info.version}. Ứng dụng sẽ tự cài đặt và mở lại.`, percent:100 });
-    setTimeout(() => autoUpdater.quitAndInstall(true, true), 800);
+    setUpdateState({ status:'ready', message:`Đã tải bản ${info.version}. Chọn Update để cài đặt khi bạn đã sẵn sàng.`, percent:100 });
+    if (!win || win.isDestroyed()) return;
+    const choice = dialog.showMessageBoxSync(win, {
+      type:'info',
+      buttons:['Cài đặt và khởi động lại','Để sau'],
+      defaultId:1,
+      cancelId:1,
+      title:'Bản cập nhật đã sẵn sàng',
+      message:`Bản ${info.version} đã được tải xuống.`,
+      detail:'Bạn có muốn cài đặt và khởi động lại ứng dụng ngay không?'
+    });
+    if (choice === 0) autoUpdater.quitAndInstall(true, true);
   });
   autoUpdater.on('error', error => setUpdateState({ status:'error', message:`Cập nhật thất bại: ${error.message}` }));
 }

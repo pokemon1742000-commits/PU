@@ -1,6 +1,17 @@
 const { contextBridge } = require('electron');
 
 const rows = {
+  purchase:[{ projectCode:'MEC2205011', purchaseOrder:'PR-MEC-001', itemCode:'KEG12Y', itemName:'Cover', quantity:2, sourceFile:'MuaHang-demo.xlsx' }],
+  scan:[{ projectCode:'MEC2205011', drawingCode:'KEG12Y', manufacturer:'PMA', quantity:2, scanDate:'15/Aug' }],
+  warehouse:[{ projectCode:'MEC2205011', itemCode:'KEG12Y', supplier:'NCC A', orderedQuantity:2, receivedQuantity:2 }],
+  workshop:[{ projectCode:'AUTM260552', itemCode:'2505080-TD-001_GC', purchaseRequest:'MKS-001', orderedQuantity:1, receivedQuantity:1 }],
+  comparison:[{
+    projectCode:'MEC2205011', scanDrawingCode:'KEG12Y', status:'Chờ xác nhận',
+    purchaseDecisionId:'purchase-demo', purchaseKind:'pending', purchaseCandidateCode:'KEG12V', purchaseScore:92,
+    purchaseOptions:[{ code:'KEG12V', score:92 }, { code:'KEG12Y', score:88 }],
+    warehouseDecisionId:'warehouse-demo', warehouseKind:'pending', warehouseCandidateCode:'KEG12Y', warehouseScore:100,
+    warehouseOptions:[{ code:'KEG12Y', score:100 }]
+  }],
   review:[{
     projectCode:'MEC2205011', scanDrawingCode:'KEG12Y', status:'Chờ xác nhận',
     purchaseDecisionId:'purchase-demo', purchaseKind:'pending', purchaseCandidateCode:'KEG12V', purchaseScore:92,
@@ -15,7 +26,7 @@ const rows = {
 };
 
 contextBridge.exposeInMainWorld('api', {
-  getState: async () => ({ counts:{ purchase:305364, scans:128, warehouse:8421, comparison:130, enough:96, shortage:21, excess:13, review:1, warnings:2 }, rawCounts:{ purchase:305364, scan:138, warehouse:8500, jobCodes:2156, warnings:305364 }, sources:[], autoThreshold:91, confirmationThreshold:90, purchaseReplacements:[], appVersion:'1.0.7' }),
+  getState: async () => ({ counts:{ purchase:305364, scans:128, warehouse:8421, workshop:18, comparison:130, enough:96, shortage:21, excess:13, review:1, warnings:2 }, rawCounts:{ purchase:305364, scan:138, warehouse:8500, workshop:18, jobCodes:2156, warnings:305364 }, sources:[], autoThreshold:91, confirmationThreshold:90, purchaseReplacements:[], appVersion:'1.0.25' }),
   getRows: async name => { const data=rows[name] || []; return { rows:data, page:1, pageSize:100, total:data.length, totalPages:1 }; },
   onUpdateStatus: () => () => {}, openExternal:async()=>true, checkForUpdates:async()=>({ status:'current' }),
   pickFiles:async()=>({ canceled:true }), loadFiles:async()=>({ canceled:true }), runComparison:async()=>({}),

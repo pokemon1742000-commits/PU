@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('api', {
   searchLoadedCode: payload => ipcRenderer.invoke('data-audit:search', payload),
   openExternal: url => ipcRenderer.invoke('external:open', url),
   checkForUpdates: () => ipcRenderer.invoke('update:check'),
+  restorePreviousVersion: () => ipcRenderer.invoke('update:rollback'),
   onUpdateStatus: callback => {
     const listener = (_event, status) => callback(status);
     ipcRenderer.on('update:status', listener);
@@ -20,6 +21,8 @@ contextBridge.exposeInMainWorld('api', {
   deletePurchaseReplacement: payload => ipcRenderer.invoke('purchase-replacement:delete', payload),
   clearSession: () => ipcRenderer.invoke('session:clear'),
   deleteDatabase: keyword => ipcRenderer.invoke('database:delete', keyword),
+  listBackups: () => ipcRenderer.invoke('database:backups'),
+  restoreBackup: fileName => ipcRenderer.invoke('database:restore', fileName),
   exportExcel: sheets => ipcRenderer.invoke('export:save', sheets),
   openExportFile: filePath => ipcRenderer.invoke('export:open', filePath),
   showExportFileInFolder: filePath => ipcRenderer.invoke('export:show-in-folder', filePath)

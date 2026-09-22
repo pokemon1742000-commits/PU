@@ -57,6 +57,8 @@ test('file import supports multiple files and explicit multi-sheet selection', (
   assert.match(html, /một hoặc nhiều sheet/);
   assert.match(js, /chooseSheets/);
   assert.match(js, /window\.api\.loadFiles/);
+  assert.match(js, /button\.disabled=true/);
+  assert.match(js, /finally \{ button\.disabled=false/);
   assert.match(js, /setTimeout\(applyThreshold,350\)/);
 });
 
@@ -185,20 +187,34 @@ test('application information dialog shows version-specific improvements and the
   assert.match(js, /window\.api\.openExternal\('https:\/\/github\.com\/pokemon1742000-commits\/PU'\)/);
   assert.match(preload, /openExternal: url => ipcRenderer\.invoke\('external:open', url\)/);
   assert.match(main, /appVersion: app\.getVersion\(\)/);
+  assert.match(main, /app\.requestSingleInstanceLock\(\)/);
+  assert.match(main, /showErrorBox/);
   assert.match(main, /ipcMain\.handle\('external:open'/);
   assert.match(main, /shell\.openExternal\(url\)/);
 });
 
-test('information dialog includes an illustrated guide for every main action', () => {
+test('information dialog includes a detailed first-use guide with one screenshot per feature step', () => {
   assert.match(html, /data-info-panel="releaseInfo"/);
   assert.match(html, /data-info-panel="guideInfo"/);
-  assert.match(html, /id="guideInfo"[\s\S]*guide-actual-controls\.png[\s\S]*guide-actual-confirm\.png[\s\S]*guide-actual-results\.png/);
-  for (const label of ['Mua Hàng','Nhập Kho','Xưởng Gia Công','Quét Mã','Đổi mã đã duyệt PR','Clear dữ liệu phiên','Xóa database','Update','Xuất Excel']) assert.match(html, new RegExp(label));
+  for (const title of ['Bắt đầu và nạp dữ liệu','Đọc dữ liệu và tinh chỉnh đối chiếu','Xác nhận và xem kết quả','Các chức năng quản trị dữ liệu','Gặp lỗi thì xử lý theo thứ tự này']) assert.match(html, new RegExp(title));
+  const guideFiles = ['guide-01-import.png','guide-02-sheet-picker.png','guide-03-table-tools.png','guide-04-threshold-theme.png','guide-05-confirm.png','guide-06-results-export.png','guide-07-replacements.png','guide-08-database.png','guide-09-export.png'];
+  for (const file of guideFiles) assert.match(html, new RegExp(file.replace('.', '\\.'), 'g'));
   assert.match(js, /function showInfoPanel\(panelId\)/);
-  assert.match(css, /\.guide-step/);
-  assert.match(css, /\.guide-actions/);
-  for (const file of ['guide-actual-controls.png','guide-actual-confirm.png','guide-actual-results.png']) assert.equal(fs.existsSync(path.join(__dirname, '..', 'assets', file)), true);
-  assert.equal(packageJson.build.files.includes('assets/guide-actual-*.png'), true);
+  assert.match(css, /\.guide-feature/);
+  assert.match(css, /\.guide-troubleshooting/);
+  assert.doesNotMatch(html, /guide-actual-controls\.png/);
+  assert.equal(packageJson.build.files.includes('assets/guide-*.png'), true);
+});
+
+test('guide screenshot generator uses square target boxes and safe demo states', () => {
+  const generator = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'generate-guide-images.js'), 'utf8');
+  const guidePreload = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'guide-preload.js'), 'utf8');
+  assert.match(generator, /capture-target-box/);
+  assert.match(generator, /getBoundingClientRect\(\)/);
+  assert.match(generator, /guide-09-export\.png/);
+  assert.match(guidePreload, /MEC2205011/);
+  assert.match(guidePreload, /AUTM260552/);
+  assert.doesNotMatch(generator, /border-radius:999px/);
 });
 
 test('raw-data eye control is placed below the table heading', () => {
@@ -273,10 +289,18 @@ test('sidebar opens a dedicated page for project-scoped old-to-new code links', 
   assert.match(css, /td\[data-column="purchaseOrder"\] \.cell-value\.changed-code\.changed-pr[\s\S]*flex-direction: column/);
 });
 
-test('sidebar exposes database management and keeps the protected delete action reachable', () => {
+test('sidebar exposes database management, backup restore, and protected delete action', () => {
   assert.match(html, /data-view="settings"[\s\S]*Quản lý cơ sở dữ liệu/);
-  assert.match(html, /id="settings" class="view"[\s\S]*id="runDataAudit"[\s\S]*id="deleteDatabase"/);
+  assert.match(html, /id="settings" class="view"[\s\S]*id="runDataAudit"[\s\S]*id="refreshBackups"[\s\S]*id="backupList"[\s\S]*id="deleteDatabase"/);
   assert.match(js, /deleteDatabase'\)\.onclick=\(\)=>startDelete\(\)/);
+  assert.match(js, /refreshBackups'\)\.onclick=loadBackups/);
+  assert.match(js, /window\.api\.listBackups\(\)/);
+  assert.match(js, /window\.api\.restoreBackup\(fileName\)/);
+  assert.match(preload, /database:backups/);
+  assert.match(preload, /database:restore/);
+  assert.match(main, /ipcMain\.handle\('database:backups'/);
+  assert.match(main, /ipcMain\.handle\('database:restore'/);
+  assert.match(main, /serializeMutation\(async \(\) => \{[\s\S]*database\.restoreBackup/);
   assert.match(js, /deleteStep=1/);
 });
 
@@ -295,6 +319,28 @@ test('application exposes actual-data audit and a separate non-destructive techn
   assert.match(main, /ipcMain\.handle\('self-check:run'/);
   assert.match(js, /window\.api\.runSelfCheck\(\)/);
   assert.match(js, /report\.ok\?'ĐẠT':'KHÔNG ĐẠT'/);
+});
+
+test('updates wait for explicit restart confirmation', () => {
+  assert.match(main, /Bản cập nhật đã sẵn sàng/);
+  assert.match(main, /Cài đặt và khởi động lại/);
+  assert.match(main, /choice === 0/);
+  assert.doesNotMatch(main, /setTimeout\(\(\) => autoUpdater\.quitAndInstall/);
+});
+
+test('installed app exposes separate Update and Restore controls', () => {
+  assert.match(html, /id="updateBtn"/);
+  assert.match(html, /id="restoreBtn"/);
+  assert.match(html, /Restore bản stable ngay trước latest/);
+  assert.match(preload, /update:check/);
+  assert.match(preload, /update:rollback/);
+  assert.match(js, /window\.api\.restorePreviousVersion\(\)/);
+  assert.match(js, /rollback-downloading/);
+  assert.match(main, /ipcMain\.handle\('update:rollback'/);
+  assert.match(main, /selectPreviousRelease/);
+  assert.match(main, /selectInstallerAsset/);
+  assert.match(main, /rollbackPreviousVersion/);
+  assert.match(main, /spawn\(temporaryFile/);
 });
 
 test('installed app exposes a silent GitHub update button and automated release command', () => {

@@ -7,8 +7,9 @@ const { Database } = require('../src/storage');
 
 test('incremental database adds, updates, and avoids duplicates', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'doi-chieu-'));
-  t.after(() => fs.rm(dir, { recursive:true, force:true }));
+  const cleanup = () => fs.rm(dir, { recursive:true, force:true });
   const db = new Database(dir); await db.init();
+  t.after(async () => { await db.close(); await cleanup(); });
   const base = { projectCode:'AUT1', purchaseOrder:'AUT1-PR', itemCode:'X1', marker:'M', itemName:'M', quantity:2 };
   const a = await db.mergePurchases([base]);
   assert.deepEqual(a.stats, { loaded:1, added:1, updated:0, unchanged:0, total:1 });
@@ -28,8 +29,9 @@ test('incremental database adds, updates, and avoids duplicates', async t => {
 
 test('persists, updates, and deletes project-scoped purchase code links', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'db-code-links-'));
-  t.after(() => fs.rm(dir, { recursive:true, force:true }));
+  const cleanup = () => fs.rm(dir, { recursive:true, force:true });
   const db = new Database(dir); await db.init();
+  t.after(async () => { await db.close(); await cleanup(); });
   let rows = await db.savePurchaseReplacement('aut1', 'old-01', 'new-01');
   assert.deepEqual(rows.map(({ projectCode, oldCode, newCode }) => ({ projectCode, oldCode, newCode })), [{ projectCode:'AUT1', oldCode:'OLD-01', newCode:'NEW-01' }]);
   rows = await db.savePurchaseReplacement('AUT1', 'OLD-01', 'NEW-02');
@@ -42,8 +44,9 @@ test('persists, updates, and deletes project-scoped purchase code links', async 
 
 test('sums duplicate purchase lines before saving and keeps their source rows', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'purchase-duplicates-'));
-  t.after(() => fs.rm(dir, { recursive:true, force:true }));
+  const cleanup = () => fs.rm(dir, { recursive:true, force:true });
   const db = new Database(dir); await db.init();
+  t.after(async () => { await db.close(); await cleanup(); });
   const common = {
     projectCode:'AUTM260552', purchaseOrder:'DES-AUTM260552-03-260701',
     itemCode:'KQ2H06-08A', marker:'Đầu nối khí', itemName:'Đầu nối khí',
@@ -62,8 +65,9 @@ test('sums duplicate purchase lines before saving and keeps their source rows', 
 
 test('Job Code database keeps old codes and only appends new unique codes', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'job-codes-'));
-  t.after(() => fs.rm(dir, { recursive:true, force:true }));
+  const cleanup = () => fs.rm(dir, { recursive:true, force:true });
   const db = new Database(dir); await db.init();
+  t.after(async () => { await db.close(); await cleanup(); });
   const first = await db.mergeJobCodes(['MEC2405010','MEC2405011']);
   assert.deepEqual(first.stats, { loaded:2, added:2, unchanged:0, total:2 });
   const second = await db.mergeJobCodes(['mec2405011','MEC2405012']);
@@ -71,12 +75,43 @@ test('Job Code database keeps old codes and only appends new unique codes', asyn
   assert.deepEqual(await db.readJobCodes(), ['MEC2405010','MEC2405011','MEC2405012']);
 });
 
+test('serializes overlapping purchase writes without losing either import', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'overlapping-purchases-'));
+  const db = new Database(dir); await db.init();
+  t.after(async () => { await db.close(); await fs.rm(dir, { recursive:true, force:true }); });
+  const [first, second] = await Promise.all([
+    db.mergePurchases([{ projectCode:'AUT1', purchaseOrder:'PR-1', itemCode:'A', quantity:1 }]),
+    db.mergePurchases([{ projectCode:'AUT1', purchaseOrder:'PR-2', itemCode:'B', quantity:2 }])
+  ]);
+  assert.equal(first.rows.length >= 1, true);
+  assert.equal(second.rows.length >= 1, true);
+  assert.deepEqual((await db.readPurchases()).map(row => row.itemCode).sort(), ['A', 'B']);
+});
+
+test('lists and restores valid SQLite backups with a pre-restore snapshot', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'backup-restore-'));
+  const db = new Database(dir); await db.init();
+  t.after(async () => { await db.close(); await fs.rm(dir, { recursive:true, force:true }); });
+  await db.mergePurchases([{ projectCode:'AUT1', purchaseOrder:'PR-1', itemCode:'A', quantity:1 }]);
+  await db.backup();
+  const before = await db.listBackups();
+  assert.equal(before.length >= 1, true);
+  const backup = before[0];
+  await db.mergePurchases([{ projectCode:'AUT1', purchaseOrder:'PR-1', itemCode:'A', quantity:9 }]);
+  await db.restoreBackup(backup.fileName);
+  assert.equal((await db.readPurchases())[0].quantity, 1);
+  assert.equal((await db.listBackups()).length >= 2, true);
+  await assert.rejects(() => db.restoreBackup('../outside.sqlite'), /Tên file backup không hợp lệ/);
+  await assert.rejects(() => db.restoreBackup('data-missing.sqlite'), /Không tìm thấy file backup/);
+});
+
 test('persists raw imports and archives the original Excel files', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'raw-imports-'));
-  t.after(() => fs.rm(dir, { recursive:true, force:true }));
+  const cleanup = () => fs.rm(dir, { recursive:true, force:true });
   const source = path.join(dir, 'Job Code.xlsx');
   await fs.writeFile(source, 'excel-source');
   const db = new Database(path.join(dir, 'database')); await db.init();
+  t.after(async () => { await db.close(); await cleanup(); });
   const purchaseRows = [{ projectCode:'MEC1', purchaseOrder:'MEC1-PR' }];
   const jobRows = [{ code:'MEC1', note:'Trùng 2 dòng', sourceRow:5 }];
   await db.writeRawPurchases(purchaseRows);
@@ -86,13 +121,14 @@ test('persists raw imports and archives the original Excel files', async t => {
   const archived = await db.archiveSourceFiles('reference', [source]);
   assert.equal(archived.length, 1);
   assert.equal(await fs.readFile(archived[0].archivedPath, 'utf8'), 'excel-source');
-  assert.equal((await db.read(db.archiveManifestFile)).length, 1);
+  assert.equal((await db.readSourceArchives()).length, 1);
 });
 
 test('raw purchase and Job Code rows accumulate without duplicating a reimported source row', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'raw-merge-'));
-  t.after(() => fs.rm(dir, { recursive:true, force:true }));
+  const cleanup = () => fs.rm(dir, { recursive:true, force:true });
   const db = new Database(dir); await db.init();
+  t.after(async () => { await db.close(); await cleanup(); });
   await db.mergeRawPurchases([{ purchaseOrder:'PR-1', quantity:1, sourceFile:'A.xlsx', sourceSheet:'Data', sourceRow:7 }]);
   await db.mergeRawPurchases([{ purchaseOrder:'PR-2', quantity:2, sourceFile:'B.xlsx', sourceSheet:'Data', sourceRow:8 }]);
   const purchases = await db.mergeRawPurchases([{ purchaseOrder:'PR-1', quantity:3, sourceFile:'A.xlsx', sourceSheet:'Data', sourceRow:7 }]);
@@ -106,8 +142,9 @@ test('raw purchase and Job Code rows accumulate without duplicating a reimported
 
 test('scan clears with the working session while warehouse and workshop remain long-term databases', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'working-session-'));
-  t.after(() => fs.rm(dir, { recursive:true, force:true }));
+  const cleanup = () => fs.rm(dir, { recursive:true, force:true });
   const db = new Database(dir); await db.init();
+  t.after(async () => { await db.close(); await cleanup(); });
 
   const scanA = { projectCode:'MEC1', drawingCode:'A-01', manufacturer:'MK', scanDate:'15/Aug', quantity:1 };
   const scanB = { projectCode:'MEC1', drawingCode:'B-01', manufacturer:'MK', scanDate:'15/Aug', quantity:2 };

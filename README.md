@@ -2,7 +2,7 @@
 
 Ứng dụng Electron dành cho Windows, dùng để nhập và đối chiếu dữ liệu **Mua Hàng**, **Quét Mã**, **Nhập Kho** và **Xưởng Gia Công**, sau đó xuất báo cáo Excel theo mẫu `SỐ LIỆU XUẤT KHO`.
 
-- Phiên bản hiện tại: **v1.0.11**
+- Phiên bản hiện tại: **v1.0.25**
 - Repository: <https://github.com/pokemon1742000-commits/PU>
 - Chế độ chạy mặc định: ứng dụng desktop Electron
 
@@ -21,6 +21,34 @@ npm start
 npm run start:desktop
 ```
 
+Ứng dụng dùng module native `better-sqlite3`, nên cần bản biên dịch riêng cho Node.js khi chạy test và cho Electron khi chạy ứng dụng. Các lệnh `npm test` và `npm start` tự động chọn đúng bản biên dịch tương ứng. Hai lệnh này không nên chạy đồng thời: mỗi lần rebuild sẽ thay thế file native dùng chung trong `node_modules`.
+
+Nếu cần chạy thủ công sau khi đổi runtime:
+
+```powershell
+npm run rebuild:node
+npm run rebuild:electron
+```
+
+`npm run rebuild:node` phục vụ các lệnh Node.js như test; `npm run rebuild:electron` phục vụ ứng dụng desktop. Nếu gặp lỗi `NODE_MODULE_VERSION`, hãy đóng ứng dụng rồi chạy lại lệnh rebuild phù hợp.
+
+## 1.1. Quy trình nhanh cho người dùng lần đầu
+
+Thực hiện theo đúng thứ tự dưới đây để có một báo cáo hoàn chỉnh:
+
+1. Nhấn **Tổng hợp PR**, chọn file Mua Hàng và các sheet cần nạp.
+2. Nhấn **Tổng hợp tình hình nhận hàng**, chọn file Nhập Kho.
+3. Nếu có gia công ngoài, nhấn **Tổng hợp đơn hàng sản xuất** để nạp Xưởng Gia Công.
+4. Nhấn **Xuất kho (Quét mã)**, chọn file Quét Mã và sheet tương ứng. Đây là bước kích hoạt đối chiếu.
+5. Mở tab **Xác Nhận**, chọn ứng viên đúng rồi nhấn **Ghép**; mã không đúng thì **Bỏ qua**.
+6. Kiểm tra lần lượt **Đủ Hàng**, **Thiếu** và **Thừa**; dùng ô tìm kiếm để lọc theo dự án/mã hàng.
+7. Mở **Quản lý cơ sở dữ liệu** và nhấn **Kiểm tra dữ liệu đang nạp** nếu cần đối soát từng mã.
+8. Nhấn **Xuất Excel**, chọn **So sánh PU**, **PR vs PO + XGC** hoặc cả hai, rồi xác nhận xuất file.
+
+Dữ liệu Mua Hàng, Nhập Kho, Xưởng Gia Công và Job Code được lưu dài hạn trong SQLite. **Clear dữ liệu phiên** chỉ dành cho Quét Mã và các lựa chọn xác nhận của phiên hiện tại; không dùng nút này để xóa dữ liệu tích lũy.
+
+Tab **i → Hướng dẫn sử dụng** trong phần mềm có ảnh minh họa giao diện thật, khung vuông chỉ đúng vị trí cần nhấn và hướng dẫn riêng cho từng chức năng.
+
 ## 2. Các nguồn dữ liệu
 
 Phần mềm hỗ trợ file `.xlsx` và `.xlsm`, có thể chọn nhiều file và nhiều sheet trong một lần nạp. Hàng tiêu đề được tìm trong 30 dòng đầu của mỗi sheet.
@@ -30,7 +58,7 @@ Phần mềm hỗ trợ file `.xlsx` và `.xlsm`, có thể chọn nhiều file 
 Dùng làm số lượng chuẩn để đối chiếu.
 
 | Cột trong file nguồn | Ý nghĩa trong phần mềm |
-|---|---|
+| --- | --- |
 | `Mã hàng` | Số PR |
 | `ĐVT` | Mã hàng |
 | `Maker` hoặc `Marker` | Tên hàng |
@@ -67,7 +95,7 @@ Dữ liệu Quét Mã được cộng dồn theo dự án, mã bản vẽ, nhà 
 ### 2.3. Dữ liệu Nhập Kho
 
 | Trường | Tên cột được hỗ trợ |
-|---|---|
+| --- | --- |
 | Dự án | `Tên dự án` |
 | Mã hàng | `Mã Hàng` hoặc `Mã hàng` |
 | Tên hàng | `Tên Hàng` hoặc `Tên hàng` |
@@ -87,7 +115,7 @@ Dữ liệu Nhập Kho là cơ sở dữ liệu dài hạn. Nạp file mới ch�
 Nguồn này hoạt động tương tự Nhập Kho nhưng dùng bố cục của báo cáo XGC.
 
 | Cột file XGC | Trường trong phần mềm |
-|---|---|
+| --- | --- |
 | Cột B | Số PO |
 | Cột C, tiêu đề `STT` | Ngày PR |
 | Cột D, tiêu đề `MKS` | Số PR/MKS |
@@ -157,12 +185,12 @@ Danh sách đổi mã có phân trang, mỗi trang 100 dòng.
 Phần mềm tạo các nhóm **Đủ Hàng**, **Thiếu**, **Thừa** và **Cần xác nhận**.
 
 | Điều kiện | Tình trạng xuất Excel | Người vận hành |
-|---|---|---|
+| --- | --- | --- |
 | Không có Mua Hàng nhưng có Quét Mã hoặc Nhập Kho/XGC | `Check lại` | `PU check` |
 | SL quét mã ≥ SL mua hàng | `OK` | Để trống |
 | SL quét mã < SL mua hàng và SL nhập kho = 0 | `Chưa về` | NCC nếu đã có đơn; nếu chưa có thì `PU check` |
 | SL nhập kho < SL mua hàng | `Chưa về đủ` | NCC hoặc `PU check` |
-| SL nhập kho ≥ SL mua hàng nhưng SL quét còn thiếu | `Chưa bắn code` | `Kho` |
+| SL nhập kho ≥ SL mua hàng nhưng số lượng quét còn thiếu | `Chưa bắn code` | `Kho` |
 
 Danh sách chọn trong cột Tình trạng còn có `Đã về`, `Hủy`, `Tồn` và `Common` để người dùng điều chỉnh thủ công sau khi xuất.
 
@@ -213,7 +241,27 @@ Các cột số được định dạng dạng số nguyên, không có dấu ch
 - Hướng dẫn sử dụng có hình minh họa vị trí và cách dùng các nút.
 - Liên kết mở trực tiếp repository GitHub.
 
-## 8. Lưu trữ, Clear và xóa database
+### 7.1. Bản đồ nút và trang chức năng
+
+| Nút/trang | Dùng để làm gì | Dữ liệu bị thay đổi |
+| --- | --- | --- |
+| **Tổng hợp PR** | Nạp hoặc cập nhật Mua Hàng | SQLite dài hạn của Mua Hàng |
+| **Xuất kho (Quét mã)** | Nạp dữ liệu quét và khởi động đối chiếu | Dữ liệu phiên Quét Mã |
+| **Tổng hợp tình hình nhận hàng** | Nạp/cập nhật số lượng Nhập Kho | SQLite dài hạn của Nhập Kho |
+| **Tổng hợp đơn hàng sản xuất** | Nạp/cập nhật báo cáo XGC | SQLite dài hạn của Xưởng Gia Công |
+| **Xác Nhận** | Quyết định mã gần đúng theo từng nguồn | Lựa chọn xác nhận của phiên |
+| **Đủ Hàng / Thiếu / Thừa** | Kiểm tra nhóm kết quả sau đối chiếu | Không tự sửa dữ liệu nguồn |
+| **Đổi mã duyệt PR** | Liên kết mã cũ với mã mới theo dự án | Bảng liên kết đổi mã |
+| **Xem Job Code** | Tra cứu danh sách Job Code tích hợp | Chỉ đọc |
+| **Quản lý cơ sở dữ liệu** | Đối soát, tự kiểm tra, backup/restore và xóa có bảo vệ | Tùy nút được chọn |
+| **Clear dữ liệu phiên** | Bắt đầu lại phần Quét Mã/xác nhận | Chỉ xóa dữ liệu phiên |
+| **Update** | Kiểm tra và cài bản latest đã tải | Không đổi dữ liệu nghiệp vụ |
+| **Restore** | Cài bản stable ngay trước latest để khôi phục chương trình | Không xóa dữ liệu SQLite |
+| **Xuất Excel** | Tạo workbook báo cáo từ kết quả hiện tại | Tạo file mới |
+
+Khi hộp **Chọn sheet cần nạp** xuất hiện, mỗi file có thể chọn nhiều sheet. Bỏ chọn sheet không liên quan trước khi nhấn **Nạp sheet đã chọn**; nếu không chọn sheet nào, phần mềm không chạy import. Sau khi nạp, các bảng nguồn có thể chuyển giữa dữ liệu đã gộp và **Xem file gốc** bằng biểu tượng con mắt.
+
+## 8. Lưu trữ SQLite, Clear và xóa database
 
 ### Dữ liệu được giữ lâu dài
 
@@ -231,7 +279,7 @@ Nút **Clear dữ liệu phiên** chỉ xóa dữ liệu Quét Mã, dữ liệu 
 
 Trang **Quản lý cơ sở dữ liệu** yêu cầu ba bước xác nhận và từ khóa `XÓA`. Phần mềm tạo backup cuối trước khi xóa Mua Hàng, Nhập Kho, XGC, Quét Mã và liên kết đổi mã. Job Code tích hợp vẫn được giữ.
 
-Dữ liệu desktop nằm trong thư mục `userData/data` do Electron quản lý. Bản gốc file Mua Hàng và các bản backup JSON được lưu trong thư mục dữ liệu này.
+Dữ liệu desktop nằm trong file `userData/data/app.sqlite` do Electron quản lý. Khi nâng cấp, các file JSON cũ được chuyển an toàn vào `userData/data/legacy-json-backup/` và không bị xóa tự động. File Excel gốc vẫn nằm trong `original-files/`; backup là snapshot SQLite trong `backups/`. Trang **Quản lý cơ sở dữ liệu** cho phép tải danh sách snapshot hợp lệ và khôi phục một backup; trước khi khôi phục, trạng thái hiện tại cũng được lưu thành backup mới. Nếu file SQLite bị mất nhưng còn snapshot hợp lệ, phần mềm tự khôi phục snapshot mới nhất thay vì mở database rỗng.
 
 ## 9. Kiểm tra dữ liệu có khớp hay không
 
@@ -284,12 +332,7 @@ npm run check
 npm run verify
 ```
 
-Kiểm thử web không chạy mặc định. Chỉ chạy khi chủ động yêu cầu:
-
-```powershell
-npm run test:web
-npm run check:web
-```
+Repository hiện chỉ duy trì đường chạy Electron desktop. Các script và test web/standalone cũ đã được loại bỏ vì không còn mã thực thi tương ứng.
 
 ## 11. Build, commit và GitHub
 
@@ -340,49 +383,28 @@ gh auth login
 
 ## 12. Cập nhật ứng dụng
 
-Nút **Update** kiểm tra phiên bản mới tại GitHub Releases. Khi có bản mới, ứng dụng tải xuống, đóng, cài đặt và mở lại.
+Nút **Update** kiểm tra phiên bản mới nhất tại GitHub Releases. Khi có bản mới, ứng dụng tải xuống và hỏi xác nhận trước khi cài đặt, đóng rồi mở lại.
 
-Cơ chế tự cập nhật được thiết kế cho bản cài Setup do `release:auto` tạo. GitHub Release phải có đủ:
+Nút **Restore** tìm bản stable được phát hành ngay trước bản latest trên GitHub, tải đúng bộ cài Setup của bản đó và hỏi xác nhận trước khi hạ phiên bản. Restore chỉ khôi phục **chương trình**, không phải khôi phục snapshot dữ liệu; dữ liệu SQLite trong `userData/data` không bị xóa. Nếu không có đủ hai bản stable, bản trước không cũ hơn phiên bản đang chạy, hoặc release thiếu bộ cài hợp lệ, thao tác sẽ dừng và không thay đổi ứng dụng.
+
+Cơ chế tự cập nhật và Restore được thiết kế cho bản cài Setup do `release:auto` tạo. GitHub Release phải có đủ:
 
 - `Doi-Chieu-Setup-x.y.z.exe`;
 - `Doi-Chieu-Setup-x.y.z.exe.blockmap`;
 - `latest.yml`.
 
-## 13. Chế độ web tùy chọn
+## 13. Phạm vi chạy
 
-Web không phải chế độ chạy mặc định. Chỉ dùng khi có nhu cầu riêng:
-
-```powershell
-npm run start:web
-```
-
-Mặc định máy chủ chạy tại `http://localhost:3000`. Có thể cấu hình:
-
-```powershell
-$env:PORT=8080
-$env:HOST="127.0.0.1"
-$env:APP_DATA_DIR="D:\doi-chieu-data"
-npm run start:web
-```
-
-- `PORT`: cổng, mặc định `3000`.
-- `HOST`: địa chỉ lắng nghe, mặc định `0.0.0.0`.
-- `APP_DATA_DIR`: thư mục dữ liệu máy chủ, mặc định là `data` trong dự án.
-
-Bản web tĩnh `standalone/index.html` là nhánh chức năng riêng và chỉ được tạo lại khi chủ động chạy:
-
-```powershell
-npm run build:web
-```
+Phiên bản hiện tại tập trung vào ứng dụng desktop Electron. Các script web/standalone cũ đã được loại bỏ vì không còn mã thực thi tương ứng; toàn bộ luồng lưu trữ chính dùng SQLite trong thư mục `userData/data`.
 
 ## 14. Cấu trúc mã nguồn chính
 
 | Đường dẫn | Vai trò |
-|---|---|
+| --- | --- |
 | `main.js` | Tiến trình Electron, IPC, phiên làm việc và cập nhật ứng dụng |
 | `preload.js` | API an toàn giữa giao diện và Electron |
 | `src/processor.js` | Đọc Excel, chuẩn hóa, ghép mã và phân loại |
-| `src/storage.js` | Lưu database JSON, raw data và backup |
+| `src/storage.js` | SQLite database, migration, raw data và backup snapshot |
 | `src/exporter.js` | Tạo báo cáo Excel |
 | `src/data-audit.js` | Kiểm tra độ khớp của dữ liệu thật đang nạp |
 | `src/self-check.js` | Bộ tự kiểm tra kỹ thuật bằng dữ liệu mẫu |

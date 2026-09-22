@@ -1,6 +1,6 @@
 {
   "name": "doi-chieu-du-lieu",
-  "version": "1.0.25",
+  "version": "1.0.26",
   "description": "Ứng dụng đối chiếu dữ liệu mua hàng, quét mã và nhập kho",
   "repository": {
     "type": "git",
@@ -9,27 +9,28 @@
   "main": "main.js",
   "type": "commonjs",
   "scripts": {
+    "prestart": "npm run rebuild:electron",
+    "prestart:desktop": "npm run rebuild:electron",
     "start": "electron .",
     "start:desktop": "electron .",
-    "start:web": "node web-server.js",
-    "build:web": "node scripts/build-standalone.js",
-    "test": "node --test test/data-audit.test.js test/exporter.test.js test/file-runner.test.js test/processor.test.js test/self-check.test.js test/storage.test.js test/ui.test.js",
-    "test:web": "node --test test/web.test.js test/standalone.test.js",
+    "pretest": "npm run rebuild:node",
+    "rebuild:node": "node scripts/rebuild-native.js node",
+    "rebuild:electron": "node scripts/rebuild-native.js electron",
+    "test": "node --test test/data-audit.test.js test/exporter.test.js test/file-runner.test.js test/native-runtime.test.js test/processor.test.js test/self-check.test.js test/storage.test.js test/storage-migration.test.js test/update-release.test.js test/ui.test.js",
     "verify": "node scripts/self-check.js",
-    "check": "node --check main.js && node --check preload.js && node --check src/processor.js && node --check src/file-worker.js && node --check src/exporter.js && node --check src/storage.js && node --check src/data-audit.js && node --check src/self-check.js && node --check renderer/app.js && node --check scripts/self-check.js && node --check scripts/guide-preload.js && node --check scripts/generate-guide-images.js",
-    "check:web": "node --check web-server.js && node --check src/app-service.js && node --check standalone/app.js && node --check scripts/build-standalone.js && node --check renderer/web-api.js",
+    "check": "node --check main.js && node --check preload.js && node --check src/processor.js && node --check src/file-worker.js && node --check src/exporter.js && node --check src/storage.js && node --check src/data-audit.js && node --check src/self-check.js && node --check src/update-release.js && node --check renderer/app.js && node --check scripts/self-check.js && node --check scripts/rebuild-native.js && node --check scripts/guide-preload.js && node --check scripts/generate-guide-images.js",
     "dist": "electron-builder --win portable",
     "publish": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish.ps1",
     "release:auto": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-auto.ps1"
   },
   "dependencies": {
+    "better-sqlite3": "^11.10.0",
     "electron-updater": "^6.8.9",
     "exceljs": "^4.4.0",
-    "express": "^5.2.1",
-    "fuzzball": "^2.2.3",
-    "multer": "^2.2.0"
+    "fuzzball": "^2.2.3"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.2.0",
     "electron": "^37.2.6",
     "electron-builder": "^26.0.12",
     "esbuild": "^0.25.12"
@@ -38,13 +39,16 @@
     "appId": "vn.doichieu.desktop",
     "productName": "Đối Chiếu Dữ Liệu",
     "compression": "store",
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**/*"
+    ],
     "files": [
       "main.js",
       "preload.js",
       "src/**/*",
       "renderer/**/*",
       "assets/app-logo.png",
-      "assets/guide-actual-*.png",
+      "assets/guide-*.png",
       "package.json"
     ],
     "extraResources": [

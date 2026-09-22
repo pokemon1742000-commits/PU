@@ -42,9 +42,11 @@ function bind(){
   $('#githubLink').onclick=()=>run(()=>window.api.openExternal('https://github.com/pokemon1742000-commits/PU'),null);
   $('#exportPageBtn').onclick=openExportTypePicker;
   $('#updateBtn').onclick=checkForUpdates;
+  $('#restoreBtn').onclick=restorePreviousVersion;
   window.api.onUpdateStatus(renderUpdateStatus);
   $('#clearSession').onclick=async()=>{if(confirm('Bạn có chắc muốn xóa dữ liệu Quét Mã và các xác nhận? Dữ liệu Mua Hàng, Nhập Kho và Xưởng Gia Công sẽ được giữ lại.')) await run(async()=>refresh(await window.api.clearSession()),'Đã clear phiên làm việc');};
   $('#deleteDatabase').onclick=()=>startDelete();
+  $('#refreshBackups').onclick=loadBackups;
   $('#runDataAudit').onclick=runCurrentDataAudit;
   $('#runSelfCheck').onclick=runApplicationSelfCheck;
   $('#closeCodeSearch').onclick=()=>$('#codeSearchDialog').close();
@@ -99,20 +101,32 @@ async function checkForUpdates(){
   const button=$('#updateBtn');
   button.disabled=true;
   try { renderUpdateStatus(await window.api.checkForUpdates()); }
-  catch(e){renderUpdateStatus({status:'error',message:`Cập nhật thất bại: ${e.message}`})}
+  catch(e){renderUpdateStatus({status:'error',operation:'update',message:`Cập nhật thất bại: ${e.message}`})}
+}
+async function restorePreviousVersion(){
+  const button=$('#restoreBtn');
+  if(!confirm('Restore sẽ cài bản stable ngay trước latest từ GitHub và khởi động lại ứng dụng. Dữ liệu SQLite không bị xóa. Bạn có muốn tiếp tục tìm bản Restore không?'))return;
+  button.disabled=true;
+  try { renderUpdateStatus(await window.api.restorePreviousVersion()); }
+  catch(e){renderUpdateStatus({status:'error',operation:'rollback',message:`Restore thất bại: ${e.message}`})}
 }
 function renderUpdateStatus(update){
-  const button=$('#updateBtn'),busy=['checking','downloading','installing'].includes(update?.status);
-  button.disabled=busy;
-  button.classList.toggle('updating',busy);
-  button.querySelector('span').textContent=update?.status==='downloading'?`Update ${update.percent||0}%`:update?.status==='installing'?'Đang cài...':update?.status==='checking'?'Đang kiểm tra...':'Update';
-  if(update?.message&&update.status!=='idle')toast(update.message,update.status==='error');
+  const updateButton=$('#updateBtn'),restoreButton=$('#restoreBtn');
+  const busy=['checking','downloading','installing','rollback-checking','rollback-downloading','rollback-installing'].includes(update?.status);
+  updateButton.disabled=busy;
+  restoreButton.disabled=busy;
+  updateButton.classList.toggle('updating',busy&&update?.operation==='update');
+  restoreButton.classList.toggle('updating',busy&&update?.operation==='rollback');
+  updateButton.querySelector('span').textContent=update?.operation==='update'&&update?.status==='downloading'?`Update ${update.percent||0}%`:update?.operation==='update'&&update?.status==='installing'?'Đang cài...':update?.operation==='update'&&update?.status==='checking'?'Đang kiểm tra...':'Update';
+  restoreButton.querySelector('span').textContent=update?.operation==='rollback'&&update?.status==='rollback-downloading'?`Restore ${update.percent||0}%`:update?.operation==='rollback'&&update?.status==='rollback-installing'?'Đang cài...':update?.operation==='rollback'&&update?.status==='rollback-checking'?'Đang tìm bản...':'Restore';
+  if(update?.message&&update.status!=='idle')toast(update.message,update.status==='error'||update.status==='rollback-unavailable');
 }
 function show(id,button){ $$('.view').forEach(x=>x.classList.toggle('active',x.id===id)); $$('.nav').forEach(x=>x.classList.remove('active')); button?.classList.add('active'); requestAnimationFrame(updateNavIndicator); }
 async function refresh(s){ if(s?.canceled)return; state=s; const c=s.counts||{},version=s.appVersion||'—',versionLabel=version==='—'?'v—':`v${version}`; for(const k of ['comparison','enough','shortage','excess','warnings']) $(`#${k}Count`) && ($(`#${k}Count`).textContent=c[k]||0); $('#dashPurchase').textContent=c.purchase||0;$('#dashScan').textContent=c.scans||0;$('#dashWorkshop').textContent=c.workshop||0;$('#dashReview').textContent=c.review||0;$('#reviewBadge').textContent=c.review||0;$('#appVersion').textContent=versionLabel;$('#headerVersion').textContent=versionLabel;$$('.release-note').forEach(note=>{const current=note.dataset.version===version;note.classList.toggle('current',current);note.querySelector('.current-version-badge').hidden=!current}); if(s.autoThreshold!==undefined)$('#threshold').value=s.autoThreshold;if(s.confirmationThreshold!==undefined)$('#confirmationThreshold').value=s.confirmationThreshold;syncThresholdLabels();updateRawToggle();renderCodeReplacements(); }
 
 async function handleLoad(button){
   try {
+    button.disabled=true;
     document.body.style.cursor='progress';
     const picked=await window.api.pickFiles(button.dataset.kind);
     document.body.style.cursor='';
@@ -132,7 +146,8 @@ async function handleLoad(button){
         ? ` · bỏ qua ${stats.fileErrors.length} file lỗi: ${stats.fileErrors.map(error=>`${error.file}: ${error.message}`).join('; ')}`:'';
       toast(`Đã nạp ${selections.length} file ${labelKind(button.dataset.kind)}${changes}${failures}`,Boolean(failures));
     },null);
-  } catch(e){ document.body.style.cursor=''; toast(`Lỗi: ${e.message}`,true); }
+  } catch(e){ toast(`Lỗi: ${e.message}`,true); }
+  finally { button.disabled=false; document.body.style.cursor=''; }
 }
 
 function chooseSheets(files){
@@ -266,6 +281,9 @@ async function removeCodeReplacement(projectCode,oldCode){
 }
 function paginationSequence(current,total){const pages=[1,2,3,current-1,current,current+1,total-1,total].filter(page=>page>=1&&page<=total);const unique=[...new Set(pages)].sort((a,b)=>a-b),items=[];unique.forEach((page,index)=>{if(index&&page-unique[index-1]>1)items.push('…');items.push(page)});return items}
 function renderPagination(){const {page,total,totalPages,pageSize}=tablePage,start=total?(page-1)*pageSize+1:0,end=Math.min(page*pageSize,total),items=paginationSequence(page,totalPages);const html=`<span class="page-summary">${start}–${end} / ${total} dòng</span><div class="page-icons">${items.map(item=>item==='…'?'<span class="page-ellipsis">…</span>':`<button class="page-icon${item===page?' active':''}" data-page="${item}" aria-label="Trang ${item}" ${item===page?'aria-current="page"':''}>${item}</button>`).join('')}</div>`;$('#paginationTop').innerHTML=html;$$('#paginationTop .page-icon').forEach(button=>button.onclick=()=>loadTablePage(Number(button.dataset.page)))}
+const backupLabels={purchases:'Mua Hàng',warehouse:'Nhập Kho',workshop:'Xưởng Gia Công'};
+async function loadBackups(){const button=$('#refreshBackups'),list=$('#backupList');button.disabled=true;list.innerHTML='<div class="self-check-empty">Đang tải danh sách backup…</div>';try{const backups=await window.api.listBackups();list.innerHTML=backups.length?backups.map(backup=>`<article class="backup-entry"><div><strong>${escapeHtml(backup.fileName)}</strong><small>${escapeHtml(backup.createdAt)} · ${Math.ceil(backup.size/1024)} KB · ${backup.valid?'Hợp lệ':'Không hợp lệ'}</small></div><button class="button backup-restore${backup.valid?'':' hidden'}" type="button" data-file-name="${escapeHtml(backup.fileName)}">Khôi phục</button></article>`).join(''):'<div class="self-check-empty">Chưa có backup SQLite.</div>';$$('.backup-restore').forEach(item=>item.onclick=()=>restoreBackup(item.dataset.fileName));}catch(error){list.innerHTML=`<div class="self-check-empty">Không thể đọc backup: ${escapeHtml(error.message)}</div>`}finally{button.disabled=false}}
+async function restoreBackup(fileName){if(!confirm(`Khôi phục dữ liệu từ ${fileName}? Dữ liệu hiện tại sẽ được lưu thành backup trước khi thay thế.`))return;await run(async()=>{await refresh(await window.api.restoreBackup(fileName));await loadTablePage(tablePage.page)},'Đã khôi phục dữ liệu từ backup');}
 let deleteStep=1; function startDelete(){deleteStep=1;renderDelete();$('#deleteDialog').showModal()} function renderDelete(){const titles=['Xóa toàn bộ dữ liệu Mua Hàng?','Hành động không thể hoàn tác','Xác nhận lần cuối'];const texts=['Baseline tích lũy sẽ bị xóa sau ba bước xác nhận.','Toàn bộ dữ liệu Mua Hàng từ trước đến nay sẽ mất. Một backup cuối sẽ được tạo.','Nhập chính xác từ XÓA để tiếp tục.'];$('#confirmStep').textContent=deleteStep;$('#confirmTitle').textContent=titles[deleteStep-1];$('#confirmText').textContent=texts[deleteStep-1];$('#deleteKeyword').classList.toggle('hidden',deleteStep!==3);$('#confirmDelete').textContent=deleteStep===3?'XÓA VĨNH VIỄN':'Xác nhận';} async function advanceDelete(){if(deleteStep<3){deleteStep++;renderDelete();return}await run(async()=>{await refresh(await window.api.deleteDatabase($('#deleteKeyword').value));$('#deleteDialog').close()},'Đã xóa database; backup cuối đã được tạo');}
 function updateNavIndicator(){const indicator=$('.nav-indicator'),active=$('.nav-item.active');if(!indicator||!active)return;const parent=active.parentElement,p=parent.getBoundingClientRect(),b=active.getBoundingClientRect();indicator.style.width=`${b.width}px`;indicator.style.transform=`translateX(${b.left-p.left+parent.scrollLeft}px)`}
 function applyTheme(theme){document.body.classList.remove('theme-mint','theme-sky','theme-lavender');if(theme!=='default')document.body.classList.add(`theme-${theme}`);$$('.theme-dot').forEach(b=>b.classList.toggle('active',b.dataset.theme===theme));localStorage.setItem('theme',theme)}
