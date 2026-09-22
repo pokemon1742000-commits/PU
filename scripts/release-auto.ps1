@@ -136,11 +136,13 @@ try {
   Invoke-Checked 'Run tests' { npm test }
   Invoke-Checked 'Check syntax' { npm run check }
   Invoke-Checked 'Run application self-check' { npm run verify }
+  Invoke-Checked 'Prepare and verify Electron native dependencies' { npm run prepare:electron-native }
   Invoke-Checked 'Build Windows updater installer' {
     # `store` avoids the memory-heavy 7-Zip compression pass. The resulting
     # installer is virtually the same size because Electron binaries are already compressed.
-    npx electron-builder --win nsis --publish never --config.compression=store "--config.directories.output=$buildOutput"
+    npx --no-install electron-builder --win nsis --x64 --publish never --config.compression=store --config.npmRebuild=false "--config.directories.output=$buildOutput"
   }
+  Invoke-Checked 'Verify packaged Electron native dependency' { npm run verify:packaged -- (Join-Path $buildOutput 'win-unpacked') }
 
   $releasePaths = @(
     '.gitignore', 'AGENTS.md', 'README.md', 'main.js', 'package.json', 'package-lock.json',

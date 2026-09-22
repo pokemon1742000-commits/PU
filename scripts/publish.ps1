@@ -97,7 +97,10 @@ if ($originProbe.ExitCode -ne 0 -or -not $origin) {
 Invoke-Checked 'Run tests' { npm test }
 Invoke-Checked 'Check syntax' { npm run check }
 Invoke-Checked 'Run application self-check' { npm run verify }
+Invoke-Checked 'Prepare and verify Electron native dependencies' { npm run prepare:electron-native }
 Invoke-Checked 'Build Windows portable app' { npm run dist }
+$portableOutput = Join-Path $projectRoot 'dist'
+Invoke-Checked 'Verify packaged Electron native dependency' { npm run verify:packaged -- (Join-Path $portableOutput 'win-unpacked') }
 Invoke-Checked 'Stage changes' { git add --all }
 
 git diff --cached --quiet

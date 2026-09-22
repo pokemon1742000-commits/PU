@@ -21,7 +21,9 @@ npm start
 npm run start:desktop
 ```
 
-Ứng dụng dùng module native `better-sqlite3`, nên cần bản biên dịch riêng cho Node.js khi chạy test và cho Electron khi chạy ứng dụng. Các lệnh `npm test` và `npm start` tự động chọn đúng bản biên dịch tương ứng. Hai lệnh này không nên chạy đồng thời: mỗi lần rebuild sẽ thay thế file native dùng chung trong `node_modules`.
+Ứng dụng dùng module native `better-sqlite3`, nên cần bản biên dịch riêng cho Node.js khi chạy test và cho Electron khi chạy ứng dụng. Trên môi trường hiện tại, Node.js dùng ABI 127 còn Electron 37 dùng ABI 136. Các lệnh `npm test` và `npm start` tự động chọn đúng bản biên dịch tương ứng. Hai lệnh này không nên chạy đồng thời: mỗi lần rebuild sẽ thay thế file native dùng chung trong `node_modules`.
+
+Quy trình phát hành chạy test trước, sau đó chạy `npm run prepare:electron-native` để rebuild và nạp thử binding bằng Electron ABI 136. Sau khi electron-builder tạo gói, `npm run verify:packaged -- <thư-mục-win-unpacked>` còn kiểm tra đúng file trong `resources/app.asar.unpacked`; nếu binding không nạp được thì phát hành sẽ dừng trước bước commit/tag/upload.
 
 Nếu cần chạy thủ công sau khi đổi runtime:
 

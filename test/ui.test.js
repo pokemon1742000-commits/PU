@@ -362,7 +362,12 @@ test('installed app exposes a silent GitHub update button and automated release 
   assert.equal(packageJson.build.publish.repo, 'PU');
   assert.equal(packageJson.build.nsis.perMachine, false);
   assert.match(releaseAuto, /npm version patch --no-git-tag-version/);
-  assert.match(releaseAuto, /electron-builder --win nsis --publish never/);
+  assert.match(releaseAuto, /electron-builder --win nsis --x64 --publish never/);
+  assert.match(releaseAuto, /--config\.npmRebuild=false/);
+  assert.match(releaseAuto, /prepare:electron-native/);
+  assert.match(releaseAuto, /verify:packaged/);
+  assert.ok(releaseAuto.indexOf('prepare:electron-native') < releaseAuto.indexOf('electron-builder'));
+  assert.ok(releaseAuto.indexOf('electron-builder') < releaseAuto.indexOf('verify:packaged'));
   assert.match(releaseAuto, /gh release create/);
   assert.match(releaseAuto, /gh release upload/);
   assert.match(releaseAuto, /Join-Path \$buildOutput 'latest\.yml'/);
