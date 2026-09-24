@@ -5,7 +5,7 @@ const fileSystem = require('fs');
 const https = require('https');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
-const { runFileParser } = require('./src/file-runner');
+const { runFileParser, runStreamingFileParser } = require('./src/file-runner');
 const { autoUpdater } = require('electron-updater');
 const { buildComparison, resolveReview, filterPurchasesByProjectPrefix, prioritizeProjectWarnings, mergePurchaseRows, mergeWarehouseRows, mergeWorkshopRows } = require('./src/processor');
 const { exportWorkbook, EXPORT_TYPES } = require('./src/exporter');
@@ -13,6 +13,7 @@ const { Database } = require('./src/storage');
 const { runSelfCheck } = require('./src/self-check');
 const { auditSessionData, searchLoadedCode } = require('./src/data-audit');
 const { REPOSITORY, selectPreviousRelease, selectInstallerAsset } = require('./src/update-release');
+const { prepareDataVersion, completeDataVersion } = require('./src/version-data');
 
 let win;
 let session = emptySession();
@@ -23,13 +24,28 @@ let confirmationThreshold = 90;
 let mutationQueue = Promise.resolve();
 let updateState = { status:'idle', operation:'update', message:'Sẵn sàng kiểm tra cập nhật', percent:0, currentVersion:app.getVersion() };
 const DEFAULT_PAGE_SIZE = 100;
+const RAW_TABLES = { purchaseDetails:'purchase_raw', scanDetails:'scan_raw', warehouseDetails:'warehouse_raw', workshopDetails:'workshop_raw' };
+const PERSISTED_TABLES = { purchase:'purchases', scan:'scans', warehouse:'warehouse', workshop:'workshop' };
+const MAX_SESSION_ROWS = 50000;
 const BUILT_IN_JOB_CODE_FILE = path.join(app.isPackaged ? process.resourcesPath : __dirname, 'assets', 'MKAC Monthly Timesheet.xlsx');
 let builtInJobCodeReference;
+let activeImport = null;
+const MAX_FORMAT_WARNINGS = 2000;
 
 app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096');
 
 function emptySession() {
-  return { purchase: [], purchaseAll: [], purchaseDetails: [], purchaseReplacements: [], scans: [], scanDetails: [], warehouse: [], warehouseDetails: [], workshop: [], workshopDetails: [], comparisonWarehouse: [], comparison: [], dataAudit: [], review: [], warnings: [], formatWarnings: [], jobCodes: [], jobCodeDetails: [], jobCodeNotes: new Map(), decisions: new Map(), sources: [] };
+  return { purchase: [], purchaseAll: [], purchaseDetails: [], purchaseReplacements: [], scans: [], scanDetails: [], warehouse: [], warehouseDetails: [], workshop: [], workshopDetails: [], comparisonWarehouse: [], comparison: [], dataAudit: [], review: [], warnings: [], formatWarnings: [], jobCodes: [], jobCodeDetails: [], jobCodeNotes: new Map(), decisions: new Map(), sources: [], largeDatasets:new Set() };
+}
+
+async function readRowsForSession(table) {
+  const total = await database.countTableRows(table);
+  if (total > MAX_SESSION_ROWS) {
+    session.largeDatasets.add(table);
+    return [];
+  }
+  session.largeDatasets.delete(table);
+  return database.readTablePage(table, { limit:MAX_SESSION_ROWS });
 }
 
 function serializeMutation(task) {
@@ -58,16 +74,19 @@ function createWindow() {
 }
 
 async function initializeApplication() {
-  database = database || new Database(path.join(app.getPath('userData'), 'data'));
+  if (!database) {
+    const userDataDir = app.getPath('userData');
+    await prepareDataVersion({ userDataDir, currentVersion:app.getVersion() });
+    database = new Database(path.join(userDataDir, 'data'));
+  }
   await database.init();
-  const [purchaseAll, purchaseDetails, purchaseReplacements, scans, scanDetails, warehouse, warehouseDetails, workshop, workshopDetails, workingSession, jobCodeReference] = await Promise.all([
-    database.readPurchases(), database.readRawPurchases(), database.readPurchaseReplacements(),
-    database.readScans(), database.readRawScans(), database.readWarehouse(), database.readRawWarehouse(),
-    database.readWorkshop(), database.readRawWorkshop(), database.readWorkingSession(), readBuiltInJobCodeReference()
+  const [purchaseAll, purchaseReplacements, scans, warehouse, workshop, workingSession, jobCodeReference] = await Promise.all([
+    readRowsForSession('purchases'), database.readPurchaseReplacements(), readRowsForSession('scans'),
+    readRowsForSession('warehouse'), readRowsForSession('workshop'), database.readWorkingSession(), readBuiltInJobCodeReference()
   ]);
   applyThresholdSettings(workingSession);
-  session = sessionWithBuiltInJobCodes({ ...session, purchaseAll, purchaseDetails, purchaseReplacements, scans, scanDetails, warehouse, warehouseDetails, workshop, workshopDetails, formatWarnings:workingSession.formatWarnings || [], sources:workingSession.sources || [], decisions:new Map(workingSession.decisions || []) }, jobCodeReference);
-  refreshValidatedSession();
+  session = sessionWithBuiltInJobCodes({ ...session, purchaseAll, purchaseReplacements, scans, warehouse, workshop, formatWarnings:workingSession.formatWarnings || [], sources:workingSession.sources || [], decisions:new Map(workingSession.decisions || []) }, jobCodeReference);
+  await refreshValidatedSession();
   autoCompareWhenReady();
 }
 
@@ -84,6 +103,7 @@ if (!gotSingleInstanceLock) {
   app.whenReady().then(async () => {
     Menu.setApplicationMenu(null);
     await initializeApplication();
+    await completeDataVersion({ userDataDir:app.getPath('userData'), currentVersion:app.getVersion() });
     configureAutoUpdater();
     registerIpc();
     createWindow();
@@ -103,6 +123,7 @@ if (!gotSingleInstanceLock) {
         try {
           await database.createFreshDatabaseAfterRecovery();
           await initializeApplication();
+          await completeDataVersion({ userDataDir:app.getPath('userData'), currentVersion:app.getVersion() });
           configureAutoUpdater();
           registerIpc();
           createWindow();
@@ -131,15 +152,19 @@ app.on('before-quit', async event => {
 app.on('window-all-closed', () => process.platform !== 'darwin' && app.quit());
 
 function registerIpc() {
-  ipcMain.handle('state:get', async () => summary());
+  ipcMain.handle('state:get', async () => await summary());
   ipcMain.handle('self-check:run', async () => runSelfCheck({ rootDir:__dirname, jobCodeFile:BUILT_IN_JOB_CODE_FILE }));
   ipcMain.handle('data-audit:run', async () => {
-    const report = auditSessionData(session);
+    ensureFullDatasetAvailable('kiểm tra dữ liệu');
+    const report = auditSessionData(await sessionWithRawDetails());
     session.dataAudit = report.rows;
     const { rows, ...summary } = report;
     return summary;
   });
-  ipcMain.handle('data-audit:search', async (_event, payload) => searchLoadedCode(session, payload?.projectCode, payload?.code));
+  ipcMain.handle('data-audit:search', async (_event, payload) => {
+    ensureFullDatasetAvailable('tìm kiếm dữ liệu');
+    return searchLoadedCode(await sessionWithRawDetails(), payload?.projectCode, payload?.code);
+  });
   ipcMain.handle('external:open', async (_e, url) => {
     if (url !== 'https://github.com/pokemon1742000-commits/PU') throw new Error('Đường dẫn không được phép.');
     await shell.openExternal(url);
@@ -169,17 +194,24 @@ function registerIpc() {
     return { canceled: false, files };
   });
   ipcMain.handle('files:load', async (_e, kind, selections) => serializeMutation(() => load(kind, selections)));
+  ipcMain.handle('files:cancel', async () => {
+    if (!activeImport) return false;
+    activeImport.controller.abort();
+    return true;
+  });
   ipcMain.handle('comparison:run', async (_e, settings) => {
+    ensureFullDatasetAvailable('đối chiếu');
     const autoThreshold = typeof settings === 'object' ? settings.autoThreshold : settings;
     const confirmThreshold = typeof settings === 'object' ? settings.confirmationThreshold : confirmationThreshold;
     runComparison(Number(autoThreshold) || 91, Number(confirmThreshold));
-    return saveWorkingSession().then(() => summary());
+    await saveWorkingSession();
+    return await summary();
   });
   ipcMain.handle('review:resolve', async (_e, payload) => serializeMutation(async () => {
     const out = resolveReview(session, payload);
     Object.assign(session, out);
     await saveWorkingSession();
-    return summary();
+    return await summary();
   }));
   ipcMain.handle('purchase-replacement:save', async (_e, payload) => serializeMutation(async () => {
     const projectCodes = [...new Set(String(payload?.projectCode || '').split(',').map(value => value.trim().toUpperCase()).filter(Boolean))];
@@ -194,49 +226,45 @@ function registerIpc() {
     }
     for (const projectCode of projectCodes) session.purchaseReplacements = await database.savePurchaseReplacement(projectCode, oldCode, newCode);
     autoCompareWhenReady();
-    return summary();
+    return await summary();
   }));
   ipcMain.handle('purchase-replacement:delete', async (_e, payload) => serializeMutation(async () => {
     session.purchaseReplacements = await database.deletePurchaseReplacement(payload?.projectCode, payload?.oldCode);
     autoCompareWhenReady();
-    return summary();
+    return await summary();
   }));
   ipcMain.handle('data:rows', (_e, name, options) => rowsFor(name, options));
   ipcMain.handle('session:clear', async () => serializeMutation(async () => {
     await database.clearWorkingSession();
-    const [purchaseAll, purchaseDetails, purchaseReplacements, warehouse, warehouseDetails, workshop, workshopDetails, workingSession, jobCodeReference] = await Promise.all([
-      database.readPurchases(), database.readRawPurchases(), database.readPurchaseReplacements(),
-      database.readWarehouse(), database.readRawWarehouse(), database.readWorkshop(), database.readRawWorkshop(), database.readWorkingSession(), readBuiltInJobCodeReference()
+    const [purchaseAll, purchaseReplacements, warehouse, workshop, workingSession, jobCodeReference] = await Promise.all([
+      database.readPurchases(), database.readPurchaseReplacements(), database.readWarehouse(), database.readWorkshop(), database.readWorkingSession(), readBuiltInJobCodeReference()
     ]);
-    session = sessionWithBuiltInJobCodes({ ...emptySession(), purchaseAll, purchaseDetails, purchaseReplacements, warehouse, warehouseDetails, workshop, workshopDetails, formatWarnings:workingSession.formatWarnings || [], sources:workingSession.sources || [] }, jobCodeReference);
-    refreshValidatedSession();
-    return summary();
+    session = sessionWithBuiltInJobCodes({ ...emptySession(), purchaseAll, purchaseReplacements, warehouse, workshop, formatWarnings:workingSession.formatWarnings || [], sources:workingSession.sources || [] }, jobCodeReference);
+    await refreshValidatedSession();
+    return await summary();
   }));
   ipcMain.handle('database:delete', async (_e, keyword) => serializeMutation(async () => {
     if (keyword !== 'XÓA') throw new Error('Từ khóa xác nhận không đúng.');
     await database.backupAndClear();
-    const [purchaseDetails, jobCodeReference] = await Promise.all([
-      database.readRawPurchases(), readBuiltInJobCodeReference()
-    ]);
-    session = sessionWithBuiltInJobCodes({ ...emptySession(), purchaseDetails }, jobCodeReference);
-    refreshValidatedSession();
-    return summary();
+    const jobCodeReference = await readBuiltInJobCodeReference();
+    session = sessionWithBuiltInJobCodes(emptySession(), jobCodeReference);
+    await refreshValidatedSession();
+    return await summary();
   }));
   ipcMain.handle('database:backups', async () => database.listBackups());
   ipcMain.handle('database:restore', async (_e, fileName) => serializeMutation(async () => {
     await database.restoreBackup(fileName);
-    const [purchaseAll, purchaseDetails, purchaseReplacements, scans, scanDetails, warehouse, warehouseDetails, workshop, workshopDetails, workingSession, jobCodeReference] = await Promise.all([
-      database.readPurchases(), database.readRawPurchases(), database.readPurchaseReplacements(),
-      database.readScans(), database.readRawScans(), database.readWarehouse(), database.readRawWarehouse(),
-      database.readWorkshop(), database.readRawWorkshop(), database.readWorkingSession(), readBuiltInJobCodeReference()
+    const [purchaseAll, purchaseReplacements, scans, warehouse, workshop, workingSession, jobCodeReference] = await Promise.all([
+      database.readPurchases(), database.readPurchaseReplacements(), database.readScans(), database.readWarehouse(), database.readWorkshop(), database.readWorkingSession(), readBuiltInJobCodeReference()
     ]);
     applyThresholdSettings(workingSession);
-    session = sessionWithBuiltInJobCodes({ ...session, purchaseAll, purchaseDetails, purchaseReplacements, scans, scanDetails, warehouse, warehouseDetails, workshop, workshopDetails, formatWarnings:workingSession.formatWarnings || [], sources:workingSession.sources || [], decisions:new Map(workingSession.decisions || []) }, jobCodeReference);
-    refreshValidatedSession();
+    session = sessionWithBuiltInJobCodes({ ...emptySession(), purchaseAll, purchaseReplacements, scans, warehouse, workshop, formatWarnings:workingSession.formatWarnings || [], sources:workingSession.sources || [], decisions:new Map(workingSession.decisions || []) }, jobCodeReference);
+    await refreshValidatedSession();
     autoCompareWhenReady();
-    return summary();
+    return await summary();
   }));
   ipcMain.handle('export:save', async (_e, sheetNames) => {
+    ensureFullDatasetAvailable('xuất Excel');
     const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
     const list = Array.isArray(sheetNames) ? sheetNames.map(String) : [];
     const wantPu = list.includes(EXPORT_TYPES.PU), wantSource = list.includes(EXPORT_TYPES.SOURCE);
@@ -268,66 +296,112 @@ function registerIpc() {
   });
 }
 
-async function load(kind, selections) {
-  try {
-    const selectedPaths = selections.map(selection => selection.path);
-    const result = await processFilesInWorker(kind, selections);
-    const filePaths = result.successfulFiles || selectedPaths;
-    if (kind === 'purchase') {
-      const merged = await database.mergePurchases(result.rows);
-      session.purchaseAll = merged.rows;
-      [session.purchaseDetails] = await Promise.all([
-        database.mergeRawPurchases(result.details || result.rows), database.archiveSourceFiles(kind, filePaths)
-      ]);
-      result.stats = merged.stats;
-    } else if (kind === 'scan') {
-      const merged = await database.mergeScans(result.rows);
-      session.scans = merged.rows;
-      session.scanDetails = await database.mergeRawScans(result.details || result.rows);
-      result.stats = merged.stats;
-    } else if (kind === 'warehouse') {
-      const merged = await database.mergeWarehouse(result.rows);
-      session.warehouse = merged.rows;
-      session.warehouseDetails = await database.mergeRawWarehouse(result.details || result.rows);
-      result.stats = merged.stats;
-    } else if (kind === 'workshop') {
-      const merged = await database.mergeWorkshop(result.rows);
-      session.workshop = merged.rows;
-      session.workshopDetails = await database.mergeRawWorkshop(result.details || result.rows);
-      result.stats = merged.stats;
-    }
-    session.formatWarnings.push(...(result.warnings || []));
-    refreshValidatedSession();
-    session.sources.push(...filePaths.map(p => ({ kind, file: path.basename(p), path: p, loadedAt: new Date().toISOString() })));
-    await saveWorkingSession();
-    autoCompareWhenReady();
-    return { ...summary(), loadStats: { ...(result.stats || { loaded: result.rows.length }), fileErrors: result.fileErrors || [] } };
-  } catch (error) { throw new Error(error.message || String(error)); }
+function sendImportProgress(progress) {
+  if (win && !win.isDestroyed()) win.webContents.send('import:progress', progress);
 }
 
-function rowsFor(name, options = {}) {
+async function load(kind, selections) {
+  if (activeImport) throw new Error('Đang có một tác vụ nạp dữ liệu khác.');
+  const controller = new AbortController();
+  activeImport = { controller, kind };
+  const fileErrors = [];
+  const successfulFiles = [];
+  const warnings = [];
+  let warningCount = 0;
+  let loaded = 0;
+  try {
+    for (const source of selections || []) {
+      if (controller.signal.aborted) throw new Error('Đã hủy nạp dữ liệu.');
+      let importId;
+      try {
+        importId = await database.beginRawImport(kind, source);
+        const result = await runStreamingFileParser(
+          path.join(__dirname, 'src', 'file-worker.js'),
+          { kind, source, batchSize:500 },
+          {
+            onBatch: async (rows, batchWarnings, progress) => {
+              if (controller.signal.aborted) throw new Error('Đã hủy nạp dữ liệu.');
+              await database.importRawBatch(kind, rows, importId);
+              loaded += rows.length;
+              warningCount += batchWarnings.length;
+              if (warnings.length < MAX_FORMAT_WARNINGS) warnings.push(...batchWarnings.slice(0, MAX_FORMAT_WARNINGS - warnings.length));
+              sendImportProgress({ kind, file:path.basename(source.path), ...progress, loaded, warningCount });
+            }
+          },
+          { signal:controller.signal }
+        );
+        await database.commitRawImport(kind, importId);
+        importId = null;
+        successfulFiles.push(source.path);
+        sendImportProgress({ kind, file:path.basename(source.path), complete:true, ...result, loaded, warningCount });
+      } catch (error) {
+        if (importId) await database.discardRawImport(importId);
+        if (error?.code === 'IMPORT_CANCELLED' || controller.signal.aborted) throw error;
+        fileErrors.push({ file:parserFileName(source), message:error.message || String(error) });
+      }
+    }
+    if (!successfulFiles.length) {
+      const detail = fileErrors.map(error => `${error.file}: ${error.message}`).join('; ');
+      throw new Error(`Không thể đọc file ${kind === 'warehouse' ? 'Nhập Kho' : 'Excel'}: ${detail}`);
+    }
+
+    const merged = await database.rebuildMergedFromRaw(kind, { includeRows:false });
+    if (kind === 'purchase') session.purchaseAll = await readRowsForSession('purchases');
+    else if (kind === 'scan') session.scans = await readRowsForSession('scans');
+    else if (kind === 'warehouse') session.warehouse = await readRowsForSession('warehouse');
+    else if (kind === 'workshop') session.workshop = await readRowsForSession('workshop');
+
+    session.formatWarnings.push(...warnings);
+    if (warningCount > warnings.length) session.formatWarnings.push({ source:'Hệ thống', note:`Đã ghi nhận thêm ${warningCount - warnings.length} cảnh báo định dạng; chỉ giữ ${MAX_FORMAT_WARNINGS} cảnh báo mới nhất trong phiên này.` });
+    await refreshValidatedSession();
+    session.sources.push(...successfulFiles.map(filePath => ({ kind, file:path.basename(filePath), path:filePath, loadedAt:new Date().toISOString() })));
+    await Promise.all([
+      kind === 'purchase' ? database.archiveSourceFiles(kind, successfulFiles) : Promise.resolve(),
+      saveWorkingSession()
+    ]);
+    autoCompareWhenReady();
+    return {
+      ...(await summary()),
+      loadStats:{ loaded, total:merged.stats.total, fileErrors, warningCount }
+    };
+  } finally {
+    activeImport = null;
+  }
+}
+
+async function rowsFor(name, options = {}) {
+  const pageSize = Math.min(Math.max(Number(options.pageSize) || DEFAULT_PAGE_SIZE, 20), 2000);
+  const requestedPage = Math.max(Number(options.page) || 1, 1);
+  const query = String(options.query || '').trim().toLowerCase();
+  const persistedTable = RAW_TABLES[name] || PERSISTED_TABLES[name];
+  if (persistedTable) {
+    const total = await database.countTableRows(persistedTable, query);
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const page = Math.min(requestedPage, totalPages);
+    const start = (page - 1) * pageSize;
+    let sourceRows = await database.readTablePage(persistedTable, { limit:pageSize, offset:start, query });
+    if (name === 'purchase') sourceRows = annotatePurchaseReplacements(sourceRows);
+    return { rows:sourceRows.map((row, index) => ({ ...row, stt:start + index + 1 })), page, pageSize, total, totalPages };
+  }
   const map = {
     purchase: session.purchase, scan: session.scans, warehouse: session.warehouse, workshop: session.workshop, dataAudit:session.dataAudit,
     comparison: session.comparison, enough: session.enough, shortage: session.shortage,
     excess: session.excess, review: session.review, warnings: session.warnings,
-    sources: session.sources, purchaseDetails: session.purchaseDetails, scanDetails: session.scanDetails, warehouseDetails: session.warehouseDetails, workshopDetails: session.workshopDetails,
-    jobCodeDetails: session.jobCodeDetails
+    sources: session.sources, jobCodeDetails: session.jobCodeDetails
   };
   let sourceRows = name === 'jobCodes'
     ? session.jobCodes.map(code => ({ code, note: session.jobCodeNotes.get(code) || '' }))
     : (map[name] || []);
   if (name === 'purchase') sourceRows = annotatePurchaseReplacements(sourceRows);
   if (name === 'warnings') sourceRows = prioritizeProjectWarnings(sourceRows);
-  const query = String(options.query || '').trim().toLowerCase();
   const filtered = query
     ? sourceRows.filter(row => Object.values(row).some(value => String(value ?? '').toLowerCase().includes(query)))
     : sourceRows;
-  const pageSize = Math.min(Math.max(Number(options.pageSize) || DEFAULT_PAGE_SIZE, 20), 2000);
   const total = filtered.length;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const page = Math.min(Math.max(Number(options.page) || 1, 1), totalPages);
+  const page = Math.min(requestedPage, totalPages);
   const start = (page - 1) * pageSize;
-  const numberedTables = ['purchase', 'scan', 'warehouse', 'workshop', 'dataAudit', 'jobCodes', 'comparison', 'enough', 'shortage', 'excess', 'review', 'warnings', 'purchaseDetails', 'scanDetails', 'warehouseDetails', 'workshopDetails', 'jobCodeDetails'];
+  const numberedTables = ['purchase', 'scan', 'warehouse', 'workshop', 'dataAudit', 'jobCodes', 'comparison', 'enough', 'shortage', 'excess', 'review', 'warnings', 'jobCodeDetails'];
   const rows = filtered.slice(start, start + pageSize).map((row, index) =>
     numberedTables.includes(name) ? { ...row, stt: start + index + 1 } : row
   );
@@ -412,13 +486,21 @@ function combineFileResults(kind, results) {
   return { rows: [...groups.values()], details: results.flatMap(result => result.details || []), warnings };
 }
 
-function summary() {
+async function summary() {
   const counts = Object.fromEntries(['purchase','scans','warehouse','workshop','jobCodes','comparison','enough','shortage','excess','review','warnings'].map(k => [k, (session[k] || []).length]));
   counts.review = (session.review || []).filter(row => row.status === 'Chờ xác nhận').length;
+  const [purchase, scan, warehouse, workshop, mergedPurchase, mergedScan, mergedWarehouse, mergedWorkshop] = await Promise.all([
+    database.countTableRows('purchase_raw'), database.countTableRows('scan_raw'), database.countTableRows('warehouse_raw'), database.countTableRows('workshop_raw'),
+    database.countTableRows('purchases'), database.countTableRows('scans'), database.countTableRows('warehouse'), database.countTableRows('workshop')
+  ]);
+  counts.purchase = mergedPurchase;
+  counts.scans = mergedScan;
+  counts.warehouse = mergedWarehouse;
+  counts.workshop = mergedWorkshop;
   return {
     counts,
     sources: session.sources,
-    rawCounts: { purchase: session.purchaseDetails.length, scan: session.scanDetails.length, warehouse: session.warehouseDetails.length, workshop: session.workshopDetails.length, jobCodes: session.jobCodeDetails.length, warnings: session.purchaseDetails.length },
+    rawCounts: { purchase, scan, warehouse, workshop, jobCodes: session.jobCodeDetails.length, warnings: purchase },
     autoThreshold: comparisonThreshold,
     confirmationThreshold,
     purchaseReplacements: session.purchaseReplacements,
@@ -426,10 +508,31 @@ function summary() {
   };
 }
 
-function refreshValidatedSession() {
+function ensureFullDatasetAvailable(action) {
+  if (!session.largeDatasets?.size) return;
+  throw new Error(`Chưa thể ${action} toàn bộ dữ liệu vì tập dữ liệu quá lớn để giữ an toàn trong RAM. Hãy lọc hoặc chia nhỏ file trước khi dùng chức năng này.`);
+}
+
+async function sessionWithRawDetails() {
+  ensureFullDatasetAvailable('đọc toàn bộ dữ liệu');
+  const [purchaseDetails, scanDetails, warehouseDetails, workshopDetails] = await Promise.all([
+    database.readRawPurchases(), database.readRawScans(), database.readRawWarehouse(), database.readRawWorkshop()
+  ]);
+  return { ...session, purchaseDetails, scanDetails, warehouseDetails, workshopDetails };
+}
+
+async function refreshValidatedSession() {
+  if (session.largeDatasets.has('purchases') || session.largeDatasets.has('purchase_raw')) {
+    session.purchase = [];
+    session.warnings = session.formatWarnings.filter(row => row.source === 'Mua Hàng');
+    return;
+  }
   const purchases = filterPurchasesByProjectPrefix(session.purchaseAll);
   session.purchase = mergePurchaseRows(purchases.valid);
-  const warningSource = session.purchaseDetails.length ? session.purchaseDetails : session.purchaseAll;
+  const rawTotal = await database.countTableRows('purchase_raw');
+  const purchaseDetails = rawTotal > MAX_SESSION_ROWS ? [] : await database.readTablePage('purchase_raw', { limit:MAX_SESSION_ROWS });
+  if (rawTotal > MAX_SESSION_ROWS) session.largeDatasets.add('purchase_raw');
+  const warningSource = purchaseDetails.length ? purchaseDetails : session.purchaseAll;
   const purchaseWarnings = filterPurchasesByProjectPrefix(warningSource).warnings;
   const purchaseFormatWarnings = session.formatWarnings.filter(row => row.source === 'Mua Hàng');
   session.warnings = [...purchaseFormatWarnings, ...purchaseWarnings];
@@ -445,6 +548,7 @@ function runComparison(threshold = 91, confirmThreshold = confirmationThreshold)
 }
 
 function autoCompareWhenReady() {
+  if (session.largeDatasets?.size) return;
   if (session.scans.length && (session.purchase.length || session.warehouse.length || session.workshop.length)) runComparison(comparisonThreshold, confirmationThreshold);
 }
 
@@ -579,7 +683,7 @@ async function rollbackPreviousVersion() {
       type:'warning', buttons:['Cài bản Restore và khởi động lại','Để sau'], defaultId:1, cancelId:1,
       title:'Khôi phục phiên bản ứng dụng',
       message:`Khôi phục từ v${app.getVersion()} về v${selection.previous.version}?`,
-      detail:`Latest trên GitHub hiện là v${selection.latest.version}. Restore sẽ cài bản stable ngay trước latest, không xóa dữ liệu SQLite, rồi đóng ứng dụng để chạy bộ cài.`
+      detail:`Latest trên GitHub hiện là v${selection.latest.version}. Restore sẽ cài bản stable ngay trước latest, rồi đóng ứng dụng để chạy bộ cài. Khi mở bản khác, toàn bộ dữ liệu SQLite cũ sẽ được xóa.`
     });
     if (choice !== 0) {
       await fs.rm(temporaryFile, { force:true });

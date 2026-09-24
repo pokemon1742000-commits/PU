@@ -58,7 +58,7 @@ test('file import supports multiple files and explicit multi-sheet selection', (
   assert.match(js, /chooseSheets/);
   assert.match(js, /window\.api\.loadFiles/);
   assert.match(js, /button\.disabled=true/);
-  assert.match(js, /finally \{ button\.disabled=false/);
+  assert.match(js, /setImportBusy\(false\)/);
   assert.match(js, /setTimeout\(applyThreshold,350\)/);
 });
 
@@ -75,18 +75,23 @@ test('workshop import exposes the XGC button, table, mapping, and raw-data view'
   assert.doesNotMatch(processor, /if \(!\/_GC\$\/i\.test\(itemCode\)\) continue/);
 });
 
-test('scan, warehouse, and workshop imports persist and merge incrementally across app restarts', () => {
-  assert.match(main, /database\.readScans\(\)/);
-  assert.match(main, /database\.readWarehouse\(\)/);
-  assert.match(main, /database\.mergeScans\(result\.rows\)/);
-  assert.match(main, /database\.mergeWarehouse\(result\.rows\)/);
-  assert.match(main, /database\.readWorkshop\(\)/);
-  assert.match(main, /database\.mergeWorkshop\(result\.rows\)/);
+test('imports stream into SQLite with staging, progress, cancellation, and durable source data', () => {
+  assert.match(main, /runStreamingFileParser/);
+  assert.match(main, /database\.beginRawImport\(kind, source\)/);
+  assert.match(main, /database\.importRawBatch\(kind, rows, importId\)/);
+  assert.match(main, /database\.commitRawImport\(kind, importId\)/);
+  assert.match(main, /database\.discardRawImport\(importId\)/);
+  assert.match(main, /database\.rebuildMergedFromRaw\(kind, \{ includeRows:false \}\)/);
+  assert.match(main, /ipcMain\.handle\('files:cancel'/);
+  assert.match(preload, /cancelImport:.*files:cancel/);
+  assert.match(preload, /onImportProgress/);
+  assert.match(html, /id="importProgress"/);
+  assert.match(html, /id="cancelImport"/);
+  assert.match(js, /window\.api\.onImportProgress\(renderImportProgress\)/);
+  assert.match(js, /window\.api\.cancelImport\(\)/);
   assert.match(main, /database\.clearWorkingSession\(\)/);
   assert.match(main, /decisions:new Map\(workingSession\.decisions \|\| \[\]\)/);
-  assert.match(js, /thêm \$\{stats\.added\}, cập nhật \$\{stats\.updated\}/);
   assert.match(js, /Dữ liệu Mua Hàng, Nhập Kho và Xưởng Gia Công sẽ được giữ lại/);
-  assert.match(main, /database\.clearWorkingSession\(\)[\s\S]*database\.readWarehouse\(\)/);
 });
 
 test('Job Code uses the bundled MKAC reference without a manual import row', () => {
@@ -130,7 +135,12 @@ test('tables provide one centered numbered pagination above the data', () => {
   assert.match(js, /paginationSequence/);
   assert.match(js, /#paginationTop \.page-icon/);
   assert.doesNotMatch(js, /paginationBottom/);
-  assert.match(js, /pageSize:100/);
+  assert.match(html, /id="tablePageSize"/);
+  assert.match(html, /<option value="50">50<\/option>[\s\S]*<option value="100" selected>100<\/option>[\s\S]*<option value="200">200<\/option>/);
+  assert.match(js, /tablePageSize/);
+  assert.match(js, /pageSize=Number\(\$\('#tablePageSize'\)\.value\)\|\|100/);
+  assert.match(js, /tablePageSize.*loadTablePage\(1\)/);
+  assert.match(css, /\.page-size-control/);
   assert.match(css, /\.page-icon/);
   assert.match(css, /border-radius: 50%/);
   assert.match(css, /\.pagination[\s\S]*justify-content: center/);
@@ -196,6 +206,10 @@ test('application information dialog shows version-specific improvements and the
   assert.match(main, /cancelId:1/);
   assert.match(main, /createFreshDatabaseAfterRecovery/);
   assert.match(main, /không có backup hợp lệ/);
+  assert.match(main, /prepareDataVersion/);
+  assert.match(main, /completeDataVersion/);
+  assert.ok(main.indexOf('prepareDataVersion') < main.indexOf('new Database'));
+  assert.ok(main.indexOf('await initializeApplication();') < main.indexOf('await completeDataVersion'));
   assert.match(main, /ipcMain\.handle\('external:open'/);
   assert.match(main, /shell\.openExternal\(url\)/);
 });
@@ -348,6 +362,8 @@ test('installed app exposes separate Update and Restore controls', () => {
   assert.match(main, /selectInstallerAsset/);
   assert.match(main, /rollbackPreviousVersion/);
   assert.match(main, /spawn\(temporaryFile/);
+  assert.match(main, /toàn bộ dữ liệu SQLite cũ sẽ được xóa/);
+  assert.match(js, /toàn bộ dữ liệu SQLite cũ sẽ bị xóa/);
 });
 
 test('installed app exposes a silent GitHub update button and automated release command', () => {

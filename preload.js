@@ -14,6 +14,12 @@ contextBridge.exposeInMainWorld('api', {
   },
   pickFiles: kind => ipcRenderer.invoke('files:pick', kind),
   loadFiles: (kind, selections) => ipcRenderer.invoke('files:load', kind, selections),
+  cancelImport: () => ipcRenderer.invoke('files:cancel'),
+  onImportProgress: callback => {
+    const listener = (_event, progress) => callback(progress);
+    ipcRenderer.on('import:progress', listener);
+    return () => ipcRenderer.removeListener('import:progress', listener);
+  },
   runComparison: threshold => ipcRenderer.invoke('comparison:run', threshold),
   getRows: (name, options) => ipcRenderer.invoke('data:rows', name, options),
   resolveReview: payload => ipcRenderer.invoke('review:resolve', payload),

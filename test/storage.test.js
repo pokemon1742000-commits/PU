@@ -140,6 +140,52 @@ test('raw purchase and Job Code rows accumulate without duplicating a reimported
   assert.deepEqual(jobs.map(row => row.code), ['MEC1','MEC2']);
 });
 
+test('raw table paging counts, searches, and preserves stable order', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'raw-paging-'));
+  const db = new Database(dir); await db.init();
+  t.after(async () => { await db.close(); await fs.rm(dir, { recursive:true, force:true }); });
+  const rows = Array.from({ length: 205 }, (_, index) => ({
+    projectCode:`MEC${index + 1}`,
+    itemCode:index === 101 ? 'SPECIAL-CODE' : `ITEM-${index + 1}`,
+    sourceFile:'purchase.xlsx', sourceSheet:'Data', sourceRow:index + 1
+  }));
+  await db.mergeRawPurchases(rows);
+  assert.equal(await db.countTableRows('purchase_raw'), 205);
+  assert.deepEqual((await db.readTablePage('purchase_raw', { limit:50, offset:50 })).map(row => row.sourceRow), Array.from({ length:50 }, (_, index) => index + 51));
+  assert.deepEqual((await db.readTablePage('purchase_raw', { limit:50, offset:250 })), []);
+  assert.equal(await db.countTableRows('purchase_raw', 'special-code'), 1);
+  assert.deepEqual(await db.readTablePage('purchase_raw', { limit:10, offset:0, query:'special-code' }), [rows[101]]);
+});
+
+test('stages raw imports, rolls back failures, and replaces only reimported sheets', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'stream-import-'));
+  const db = new Database(dir); await db.init();
+  t.after(async () => { await db.close(); await fs.rm(dir, { recursive:true, force:true }); });
+
+  const source = { path:path.join(dir, 'purchase.xlsx'), sheets:['Data'] };
+  const cancelled = await db.beginRawImport('purchase', source);
+  await db.importRawBatch('purchase', [{ sourceFile:'purchase.xlsx', sourceSheet:'Data', sourceRow:1, purchaseOrder:'PR-CANCEL' }], cancelled);
+  await db.discardRawImport(cancelled);
+  assert.equal(await db.countTableRows('purchase_raw'), 0);
+
+  const first = await db.beginRawImport('purchase', source);
+  await db.importRawBatch('purchase', [
+    { projectCode:'MEC1', purchaseOrder:'PR-1', itemCode:'A', quantity:2, sourceFile:'purchase.xlsx', sourceSheet:'Data', sourceRow:1 },
+    { projectCode:'MEC1', purchaseOrder:'PR-2', itemCode:'B', quantity:3, sourceFile:'purchase.xlsx', sourceSheet:'Data', sourceRow:2 }
+  ], first);
+  await db.commitRawImport('purchase', first);
+  assert.equal(await db.countTableRows('purchase_raw'), 2);
+
+  const second = await db.beginRawImport('purchase', source);
+  await db.importRawBatch('purchase', [{ projectCode:'MEC1', purchaseOrder:'PR-1', itemCode:'A', quantity:9, sourceFile:'purchase.xlsx', sourceSheet:'Data', sourceRow:1 }], second);
+  await db.commitRawImport('purchase', second);
+  assert.deepEqual((await db.readRawPurchases()).map(row => row.purchaseOrder), ['PR-1']);
+  const rebuilt = await db.rebuildMergedFromRaw('purchase', { includeRows:false });
+  assert.equal(rebuilt.rows.length, 0);
+  assert.equal(rebuilt.stats.total, 1);
+  assert.equal((await db.readPurchases())[0].quantity, 9);
+});
+
 test('scan clears with the working session while warehouse and workshop remain long-term databases', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'working-session-'));
   const cleanup = () => fs.rm(dir, { recursive:true, force:true });

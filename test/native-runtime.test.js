@@ -30,7 +30,7 @@ test('native SQLite dependency has explicit Node and Electron rebuild hooks', ()
 test('packaging owns Electron native preparation and verification', () => {
   assert.equal(packageJson.scripts['prepare:electron-native'], 'npm run rebuild:electron && node scripts/verify-native.js electron');
   assert.equal(packageJson.scripts['verify:packaged'], 'node scripts/verify-native.js packaged');
-  assert.equal(packageJson.scripts['pre-dist'], 'npm run prepare:electron-native');
+  assert.equal(packageJson.scripts.predist, 'npm run prepare:electron-native');
   assert.match(packageJson.scripts.dist, /--x64/);
   assert.match(packageJson.scripts.dist, /--config\.npmRebuild=false/);
   assert.equal(packageJson.build.npmRebuild, false);

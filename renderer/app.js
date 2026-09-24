@@ -1,5 +1,5 @@
 const $ = s => document.querySelector(s); const $$ = s => [...document.querySelectorAll(s)];
-let state = { counts:{}, rawCounts:{}, sources:[] }, activeTable = 'comparison', rawMode = false, tableRows = [], tablePage = { page:1, pageSize:100, total:0, totalPages:1 }, auditPage = { page:1, pageSize:100, total:0, totalPages:1 }, replacementPage = 1, tableRequest = 0, searchTimer, thresholdTimer, confirmationTimer, confirmationInFlight = false, confirmationQueue = new Map(), sheetPickerFiles = [], sheetPickerResolve, lastExportPath = '';
+let state = { counts:{}, rawCounts:{}, sources:[] }, activeTable = 'comparison', rawMode = false, tableRows = [], tablePage = { page:1, pageSize:100, total:0, totalPages:1 }, auditPage = { page:1, pageSize:100, total:0, totalPages:1 }, replacementPage = 1, tableRequest = 0, searchTimer, thresholdTimer, confirmationTimer, confirmationInFlight = false, confirmationQueue = new Map(), sheetPickerFiles = [], sheetPickerResolve, lastExportPath = '', importInFlight = false;
 const REPLACEMENT_PAGE_SIZE = 100;
 const tableLabels = { purchase:'Dữ Liệu Đặt Hàng — Sheet kiểm tra', scan:'Dữ Liệu Quét Mã — Sheet kiểm tra', warehouse:'Dữ Liệu Nhập Kho — Sheet kiểm tra', workshop:'Dữ Liệu Xưởng Gia Công — Sheet kiểm tra', jobCodes:'Job Code — Cơ sở dữ liệu tích lũy', comparison:'Xác Nhận Mã Đối Chiếu', enough:'Đủ hàng', shortage:'Thiếu hàng', excess:'Thừa hàng', warnings:'Cảnh Báo' };
 const columns = {
@@ -19,6 +19,8 @@ async function init(){ $('#sheetOptions').innerHTML='<div class="export-single-s
 function bind(){
   $$('.nav').forEach(b=>b.onclick=async()=>{show(b.dataset.view,b);if(b.dataset.openTable)await showTable(b.dataset.openTable)});
   $$('.load').forEach(b=>b.onclick=()=>handleLoad(b));
+  $('#cancelImport').onclick=async()=>{ $('#cancelImport').disabled=true;$('#importProgressDetail').textContent='Đang dừng và xóa dữ liệu nạp dở…';await window.api.cancelImport(); };
+  window.api.onImportProgress(renderImportProgress);
   $('#threshold').oninput=()=>{if(Number($('#confirmationThreshold').value)>=Number($('#threshold').value))$('#confirmationThreshold').value=Math.max(0,Number($('#threshold').value)-1);scheduleThresholdUpdate()};
   $('#confirmationThreshold').oninput=()=>{if(Number($('#confirmationThreshold').value)>=Number($('#threshold').value))$('#confirmationThreshold').value=Math.max(0,Number($('#threshold').value)-1);scheduleThresholdUpdate()};
   $('#cancelSheetPicker').onclick=()=>closeSheetPicker(null);
@@ -26,6 +28,7 @@ function bind(){
   $('#codeReplacementForm').onsubmit=saveCodeReplacement;
   $$('[data-table]').forEach(b=>b.onclick=async()=>{show('data',$(`.nav[data-open-table="${b.dataset.table}"]`));await showTable(b.dataset.table)});
   $('#tableSearch').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>loadTablePage(1),250)};
+  $('#tablePageSize').onchange=()=>{tablePage.pageSize=Number($('#tablePageSize').value);loadTablePage(1)};
   $('#rawToggle').onclick=async()=>{rawMode=!rawMode;updateRawToggle();await loadTablePage(1)};
   $('#warningShortcut').onclick=async()=>{const target=activeTable==='warnings'?'purchase':'warnings';show('data',$('.nav-item[data-open-table="purchase"]'));await showTable(target)};
   $('#exportBtn').onclick=openExportTypePicker;
@@ -105,7 +108,7 @@ async function checkForUpdates(){
 }
 async function restorePreviousVersion(){
   const button=$('#restoreBtn');
-  if(!confirm('Restore sẽ cài bản stable ngay trước latest từ GitHub và khởi động lại ứng dụng. Dữ liệu SQLite không bị xóa. Bạn có muốn tiếp tục tìm bản Restore không?'))return;
+  if(!confirm('Restore sẽ cài bản stable ngay trước latest từ GitHub và khởi động lại ứng dụng. Khi mở bản khác, toàn bộ dữ liệu SQLite cũ sẽ bị xóa. Bạn có muốn tiếp tục tìm bản Restore không?'))return;
   button.disabled=true;
   try { renderUpdateStatus(await window.api.restorePreviousVersion()); }
   catch(e){renderUpdateStatus({status:'error',operation:'rollback',message:`Restore thất bại: ${e.message}`})}
@@ -124,7 +127,24 @@ function renderUpdateStatus(update){
 function show(id,button){ $$('.view').forEach(x=>x.classList.toggle('active',x.id===id)); $$('.nav').forEach(x=>x.classList.remove('active')); button?.classList.add('active'); requestAnimationFrame(updateNavIndicator); }
 async function refresh(s){ if(s?.canceled)return; state=s; const c=s.counts||{},version=s.appVersion||'—',versionLabel=version==='—'?'v—':`v${version}`; for(const k of ['comparison','enough','shortage','excess','warnings']) $(`#${k}Count`) && ($(`#${k}Count`).textContent=c[k]||0); $('#dashPurchase').textContent=c.purchase||0;$('#dashScan').textContent=c.scans||0;$('#dashWorkshop').textContent=c.workshop||0;$('#dashReview').textContent=c.review||0;$('#reviewBadge').textContent=c.review||0;$('#appVersion').textContent=versionLabel;$('#headerVersion').textContent=versionLabel;$$('.release-note').forEach(note=>{const current=note.dataset.version===version;note.classList.toggle('current',current);note.querySelector('.current-version-badge').hidden=!current}); if(s.autoThreshold!==undefined)$('#threshold').value=s.autoThreshold;if(s.confirmationThreshold!==undefined)$('#confirmationThreshold').value=s.confirmationThreshold;syncThresholdLabels();updateRawToggle();renderCodeReplacements(); }
 
+function setImportBusy(busy){
+  importInFlight=busy;
+  $$('.load').forEach(button=>button.disabled=busy);
+  document.body.style.cursor=busy?'progress':'';
+  $('#importProgress').hidden=!busy;
+  $('#cancelImport').disabled=false;
+}
+
+function renderImportProgress(progress){
+  if(!importInFlight)return;
+  $('#importProgressFile').textContent=progress.file?`Đang đọc: ${progress.file}`:'Đang đọc file Excel…';
+  $('#importProgressRows').textContent=`${Number(progress.loaded||0).toLocaleString('vi-VN')} dòng đã lưu tạm`;
+  const detail=[progress.processed ? `${Number(progress.processed).toLocaleString('vi-VN')} dòng đã đọc` : '', progress.warningCount ? `${Number(progress.warningCount).toLocaleString('vi-VN')} cảnh báo` : ''].filter(Boolean).join(' · ');
+  $('#importProgressDetail').textContent=detail||'Dữ liệu được đọc và lưu từng lô để giảm sử dụng RAM.';
+}
+
 async function handleLoad(button){
+  if(importInFlight)return;
   try {
     button.disabled=true;
     document.body.style.cursor='progress';
@@ -133,21 +153,24 @@ async function handleLoad(button){
     if(picked?.canceled)return;
     const selections=await chooseSheets(picked.files||[]);
     if(!selections?.length)return;
-    await run(async()=>{
-      const result=await window.api.loadFiles(button.dataset.kind,selections);
-      await refresh(result);
-      const table=button.dataset.kind;
-      show('data',$(`.nav[data-open-table="${table}"]`));
-      await showTable(table);
-      const stats=result.loadStats||{};
-      const changes=Number.isFinite(stats.added)&&Number.isFinite(stats.updated)
-        ? ` · thêm ${stats.added}, cập nhật ${stats.updated}, không đổi ${stats.unchanged||0}`:'';
-      const failures=Array.isArray(stats.fileErrors)&&stats.fileErrors.length
-        ? ` · bỏ qua ${stats.fileErrors.length} file lỗi: ${stats.fileErrors.map(error=>`${error.file}: ${error.message}`).join('; ')}`:'';
-      toast(`Đã nạp ${selections.length} file ${labelKind(button.dataset.kind)}${changes}${failures}`,Boolean(failures));
-    },null);
-  } catch(e){ toast(`Lỗi: ${e.message}`,true); }
-  finally { button.disabled=false; document.body.style.cursor=''; }
+    setImportBusy(true);
+    $('#importProgressFile').textContent='Đang chuẩn bị đọc file Excel…';
+    $('#importProgressRows').textContent='0 dòng đã lưu tạm';
+    $('#importProgressDetail').textContent='Dữ liệu được đọc và lưu từng lô để giảm sử dụng RAM.';
+    const result=await window.api.loadFiles(button.dataset.kind,selections);
+    await refresh(result);
+    const table=button.dataset.kind;
+    show('data',$(`.nav[data-open-table="${table}"]`));
+    await showTable(table);
+    const stats=result.loadStats||{};
+    const failures=Array.isArray(stats.fileErrors)&&stats.fileErrors.length
+      ? ` · bỏ qua ${stats.fileErrors.length} file lỗi: ${stats.fileErrors.map(error=>`${error.file}: ${error.message}`).join('; ')}`:'';
+    const warningNote=stats.warningCount?` · ${stats.warningCount} cảnh báo định dạng`:'';
+    toast(`Đã nạp ${Number(stats.loaded||0).toLocaleString('vi-VN')} dòng ${labelKind(button.dataset.kind)}${warningNote}${failures}`,Boolean(failures));
+  } catch(e){
+    const canceled=e?.code==='IMPORT_CANCELLED'||/Đã hủy nạp dữ liệu/.test(e?.message||'');
+    toast(canceled?'Đã hủy nạp dữ liệu; các dòng nạp dở đã được xóa.':`Lỗi: ${e.message}`,!canceled);
+  } finally { setImportBusy(false); }
 }
 
 function chooseSheets(files){
@@ -188,7 +211,7 @@ function scheduleThresholdUpdate(){syncThresholdLabels();clearTimeout(thresholdT
 async function showTable(name){ activeTable=name;rawMode=false; $('#tableTitle').textContent=tableLabels[name]; $('#tableSearch').value='';updateRawToggle();await loadTablePage(1); }
 function rawSourceName(){return {purchase:'purchaseDetails',scan:'scanDetails',warehouse:'warehouseDetails',workshop:'workshopDetails',jobCodes:'jobCodeDetails',warnings:'purchaseDetails'}[activeTable]||activeTable}
 function updateRawToggle(){const button=$('#rawToggle'),supported=['purchase','scan','warehouse','workshop','jobCodes','warnings'].includes(activeTable),available=(state.rawCounts?.[activeTable]||0)>0,warningMode=['purchase','warnings'].includes(activeTable);if(!available)rawMode=false;button.hidden=!supported;button.disabled=!available;button.classList.toggle('active',rawMode);button.setAttribute('aria-pressed',String(rawMode));button.title=available?'Chuyển giữa dữ liệu đã gộp và file gốc':'Hãy nạp lại file để có dữ liệu gốc';button.querySelector('span').textContent=rawMode?'Đang xem file gốc':available?'Xem file gốc':'Chưa có file gốc';$('#warningShortcut').hidden=!warningMode;$('#warningShortcut').textContent=activeTable==='warnings'?'← Mua Hàng':'⚠ Cảnh Báo';$('#warningShortcut').classList.toggle('active',activeTable==='warnings');$('#tableSideActions').hidden=!supported&&!warningMode}
-async function loadTablePage(page){ const request=++tableRequest,source=rawMode?rawSourceName():(activeTable==='comparison'?'review':activeTable),result=await window.api.getRows(source,{page,pageSize:100,query:$('#tableSearch').value});if(request!==tableRequest)return;tableRows=result.rows;tablePage=result;renderTable(); }
+async function loadTablePage(page){ const request=++tableRequest,source=rawMode?rawSourceName():(activeTable==='comparison'?'review':activeTable),pageSize=Number($('#tablePageSize').value)||100,result=await window.api.getRows(source,{page,pageSize,query:$('#tableSearch').value});if(request!==tableRequest)return;tableRows=result.rows;tablePage=result;$('#tablePageSize').value=String(result.pageSize);renderTable(); }
 function displayedTable(){return activeTable==='warnings'&&rawMode?'purchase':activeTable}
 function renderTable(){ if(activeTable==='comparison'&&!rawMode){renderConfirmations();return}const tableName=displayedTable(),cols=columns[tableName],rows=tableRows; $('#tableHead').closest('table').dataset.table=tableName; $('#tableHead').innerHTML=`<tr>${cols.map(x=>`<th data-column="${x[0]}">${x[1]}</th>`).join('')}</tr>`; $('#tableBody').innerHTML=rows.length?rows.map(r=>`<tr class="${tableRowClass(r)}">${cols.map(x=>tableCell(x,r)).join('')}</tr>`).join(''):`<tr><td colspan="${cols.length}" class="placeholder">Chưa có dữ liệu.</td></tr>`;renderPagination(); }
 function renderConfirmations(){const table=$('#tableHead').closest('table');table.dataset.table='confirmation';$('#tableHead').innerHTML='<tr><th>Mã file Quét Mã</th><th>Mã file Mua Hàng</th><th>Mã file Nhập Kho / XGC</th><th>Trạng thái</th></tr>';$('#tableBody').innerHTML=tableRows.length?tableRows.map((row,index)=>`<tr class="${row.status==='Đã bỏ qua'?'confirmation-ignored':''}"><td><strong>${escapeHtml(row.projectCode)}</strong><br><span>${escapeHtml(row.scanDrawingCode)}</span></td><td>${confirmationCandidate(row,'purchase',index)}</td><td>${confirmationCandidate(row,'warehouse',index)}</td><td><span class="confirmation-status">${escapeHtml(row.status)}</span></td></tr>`).join(''):'<tr><td colspan="4" class="placeholder">Không có mã nào cần xác nhận hoặc đã bỏ qua.</td></tr>';renderPagination()}

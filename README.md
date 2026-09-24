@@ -180,7 +180,7 @@ Khi đối chiếu:
 - Số PR cũ gạch ngang → Số PR mới nếu tra được;
 - liên kết có thể được xóa tại trang Đổi mã.
 
-Danh sách đổi mã có phân trang, mỗi trang 100 dòng.
+Danh sách đổi mã có phân trang, mỗi trang 100 dòng; bộ chọn 50/100/200 áp dụng cho các bảng dữ liệu chính và dữ liệu gốc.
 
 ## 5. Phân loại kết quả
 
@@ -235,7 +235,7 @@ Các cột số được định dạng dạng số nguyên, không có dấu ch
 
 - Bảng thống kê số dòng của từng nguồn và từng nhóm kết quả.
 - Tìm kiếm theo mã dự án, mã hàng hoặc tên hàng.
-- Phân trang 100 dòng để xử lý bộ dữ liệu lớn.
+- Phân trang dữ liệu theo từng phần, cho phép chọn 50, 100 hoặc 200 dòng mỗi trang để giảm RAM khi xem file lớn; toàn bộ dữ liệu vẫn được giữ trong SQLite để đối chiếu và xuất Excel.
 - **Xem file gốc** để chuyển giữa dữ liệu đã gộp và từng dòng Excel ban đầu.
 - Trang **Cảnh Báo** cho dòng sai định dạng hoặc không trích xuất được dự án.
 - Bốn chủ đề màu giao diện.
@@ -257,8 +257,8 @@ Các cột số được định dạng dạng số nguyên, không có dấu ch
 | **Xem Job Code** | Tra cứu danh sách Job Code tích hợp | Chỉ đọc |
 | **Quản lý cơ sở dữ liệu** | Đối soát, tự kiểm tra, backup/restore và xóa có bảo vệ | Tùy nút được chọn |
 | **Clear dữ liệu phiên** | Bắt đầu lại phần Quét Mã/xác nhận | Chỉ xóa dữ liệu phiên |
-| **Update** | Kiểm tra và cài bản latest đã tải | Không đổi dữ liệu nghiệp vụ |
-| **Restore** | Cài bản stable ngay trước latest để khôi phục chương trình | Không xóa dữ liệu SQLite |
+| **Update** | Kiểm tra và cài bản latest đã tải | Xóa dữ liệu nghiệp vụ của bản trước khi mở bản mới |
+| **Restore** | Cài bản stable ngay trước latest để khôi phục chương trình | Xóa dữ liệu SQLite của bản khác khi mở lại |
 | **Xuất Excel** | Tạo workbook báo cáo từ kết quả hiện tại | Tạo file mới |
 
 Khi hộp **Chọn sheet cần nạp** xuất hiện, mỗi file có thể chọn nhiều sheet. Bỏ chọn sheet không liên quan trước khi nhấn **Nạp sheet đã chọn**; nếu không chọn sheet nào, phần mềm không chạy import. Sau khi nạp, các bảng nguồn có thể chuyển giữa dữ liệu đã gộp và **Xem file gốc** bằng biểu tượng con mắt.
@@ -283,6 +283,8 @@ Trang **Quản lý cơ sở dữ liệu** yêu cầu ba bước xác nhận và 
 
 Dữ liệu desktop nằm trong file `userData/data/app.sqlite` do Electron quản lý. Khi nâng cấp, các file JSON cũ được chuyển an toàn vào `userData/data/legacy-json-backup/` và không bị xóa tự động. File Excel gốc vẫn nằm trong `original-files/`; backup là snapshot SQLite trong `backups/`. Trang **Quản lý cơ sở dữ liệu** cho phép tải danh sách snapshot hợp lệ và khôi phục một backup; trước khi khôi phục, trạng thái hiện tại cũng được lưu thành backup mới. Nếu file SQLite bị mất nhưng còn snapshot hợp lệ, phần mềm tự khôi phục snapshot mới nhất thay vì mở database rỗng. Nếu `app.sqlite` bị hỏng và không có snapshot hợp lệ, ứng dụng sẽ không tự xóa dữ liệu hoặc mở database rỗng: trước tiên ứng dụng giữ nguyên file lỗi, sau đó hỏi xác nhận. Chỉ khi chọn **Tạo database mới**, file `app.sqlite` cùng các file phụ trợ SQLite sẽ được chuyển nguyên trạng vào thư mục `corrupt-database-<thời gian>/` trong `userData/data/`; database mới sẽ trống và không thể phục hồi dữ liệu nếu không còn backup hợp lệ. Hãy sao chép thư mục này trước khi thử sửa chữa thủ công.
 
+Ứng dụng ghi phiên bản đã khởi động thành công vào `userData/app-data-version.json`. Đóng rồi mở lại **cùng phiên bản** sẽ giữ nguyên toàn bộ nội dung `userData/data`. Khi cài và mở **bất kỳ phiên bản khác nào** (Update lên bản mới hoặc Restore về bản cũ), ứng dụng xóa toàn bộ thư mục `userData/data` trước khi tạo database mới, gồm SQLite, backup, file Excel gốc đã lưu và dữ liệu JSON cũ. Hãy xuất hoặc sao lưu dữ liệu cần giữ trước khi cài phiên bản khác.
+
 ## 9. Kiểm tra dữ liệu có khớp hay không
 
 Trang **Kiểm tra dữ liệu khớp** đối soát trực tiếp dữ liệu thật đang nạp. Sau khi nạp file, nhấn **Kiểm tra dữ liệu đang nạp** để xem từng mã.
@@ -305,7 +307,7 @@ Mỗi dòng được phân loại:
 - `CHÊNH LỆCH`: mã ghép tin cậy nhưng số lượng giữa các nguồn khác nhau;
 - `CẦN KIỂM TRA`: không có nguồn tương ứng, ghép gần đúng/thủ công, thiếu Quét Mã, thiếu Mua Hàng hoặc thuộc trường hợp `PU Check`.
 
-Kết quả có thống kê tổng và phân trang 100 dòng. Chức năng chỉ đọc dữ liệu phiên hiện tại, không thay đổi database.
+Kết quả có thống kê tổng và phân trang. Chức năng chỉ đọc dữ liệu phiên hiện tại, không thay đổi database.
 
 Phần **Kiểm tra kỹ thuật của phần mềm** nằm bên dưới báo cáo dữ liệu. Phần này chạy các tình huống mẫu độc lập và hiển thị từng mục `ĐẠT` hoặc `KHÔNG ĐẠT`.
 
@@ -385,9 +387,9 @@ gh auth login
 
 ## 12. Cập nhật ứng dụng
 
-Nút **Update** kiểm tra phiên bản mới nhất tại GitHub Releases. Khi có bản mới, ứng dụng tải xuống và hỏi xác nhận trước khi cài đặt, đóng rồi mở lại.
+Nút **Update** kiểm tra phiên bản mới nhất tại GitHub Releases. Khi có bản mới, ứng dụng tải xuống và hỏi xác nhận trước khi cài đặt, đóng rồi mở lại. Sau khi bản khác mở lần đầu, toàn bộ dữ liệu trong `userData/data` của phiên bản trước sẽ bị xóa; hãy xuất hoặc sao lưu dữ liệu cần giữ trước khi Update.
 
-Nút **Restore** tìm bản stable được phát hành ngay trước bản latest trên GitHub, tải đúng bộ cài Setup của bản đó và hỏi xác nhận trước khi hạ phiên bản. Restore chỉ khôi phục **chương trình**, không phải khôi phục snapshot dữ liệu; dữ liệu SQLite trong `userData/data` không bị xóa. Nếu không có đủ hai bản stable, bản trước không cũ hơn phiên bản đang chạy, hoặc release thiếu bộ cài hợp lệ, thao tác sẽ dừng và không thay đổi ứng dụng.
+Nút **Restore** tìm bản stable được phát hành ngay trước bản latest trên GitHub, tải đúng bộ cài Setup của bản đó và hỏi xác nhận trước khi hạ phiên bản. Restore chỉ khôi phục **chương trình**, không phải khôi phục snapshot dữ liệu; vì mở một phiên bản khác, dữ liệu SQLite trong `userData/data` cũng sẽ bị xóa khi bản Restore khởi động. Nếu không có đủ hai bản stable, bản trước không cũ hơn phiên bản đang chạy, hoặc release thiếu bộ cài hợp lệ, thao tác sẽ dừng và không thay đổi ứng dụng.
 
 Cơ chế tự cập nhật và Restore được thiết kế cho bản cài Setup do `release:auto` tạo. GitHub Release phải có đủ:
 

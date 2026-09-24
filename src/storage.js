@@ -3,6 +3,8 @@ const path = require('path');
 const DatabaseDriver = require('better-sqlite3');
 
 const SCHEMA_VERSION = 1;
+const RAW_TABLES = new Set(['purchase_raw', 'scan_raw', 'warehouse_raw', 'workshop_raw']);
+const PAGED_TABLES = new Set([...RAW_TABLES, 'purchases', 'scans', 'warehouse', 'workshop']);
 const DATASETS = {
   purchases: { file:'purchases.json', table:'purchases' },
   purchaseRaw: { file:'purchase-raw.json', table:'purchase_raw' },
@@ -166,6 +168,9 @@ class Database {
       CREATE TABLE IF NOT EXISTS purchase_code_replacements (id INTEGER PRIMARY KEY, record_key TEXT NOT NULL UNIQUE, row_json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS source_archives (id INTEGER PRIMARY KEY, record_key TEXT NOT NULL UNIQUE, row_json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS working_session (id INTEGER PRIMARY KEY CHECK(id = 1), record_key TEXT NOT NULL UNIQUE, row_json TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS import_sessions (import_id TEXT PRIMARY KEY, kind TEXT NOT NULL, source_json TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS import_staging (import_id TEXT NOT NULL, record_key TEXT NOT NULL, row_json TEXT NOT NULL, PRIMARY KEY(import_id, record_key), FOREIGN KEY(import_id) REFERENCES import_sessions(import_id) ON DELETE CASCADE);
+      CREATE INDEX IF NOT EXISTS import_staging_import_index ON import_staging(import_id);
       CREATE INDEX IF NOT EXISTS purchases_key_index ON purchases(record_key);
       CREATE INDEX IF NOT EXISTS purchase_raw_key_index ON purchase_raw(record_key);
       CREATE INDEX IF NOT EXISTS scans_key_index ON scans(record_key);
@@ -253,6 +258,28 @@ class Database {
     return this.db.prepare(`SELECT row_json FROM ${table} ORDER BY id`).all().map(row => JSON.parse(row.row_json));
   }
 
+  tableRowCount(table, query = '') {
+    this.ensureOpen();
+    if (!PAGED_TABLES.has(table)) throw new Error('Bảng dữ liệu không được phép truy vấn phân trang.');
+    const normalized = text(query).toLowerCase();
+    if (!normalized) return this.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count;
+    return this.db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE EXISTS (SELECT 1 FROM json_each(${table}.row_json) WHERE lower(CAST(json_each.value AS TEXT)) LIKE '%' || ? || '%')`).get(normalized).count;
+  }
+
+  async readTablePage(table, options) { return this.tableRowsPage(table, options); }
+  async countTableRows(table, query) { return this.tableRowCount(table, query); }
+
+  tableRowsPage(table, { limit = 100, offset = 0, query = '' } = {}) {
+    this.ensureOpen();
+    if (!PAGED_TABLES.has(table)) throw new Error('Bảng dữ liệu không được phép truy vấn phân trang.');
+    const normalized = text(query).toLowerCase();
+    const statement = normalized
+      ? this.db.prepare(`SELECT row_json FROM ${table} WHERE EXISTS (SELECT 1 FROM json_each(${table}.row_json) WHERE lower(CAST(json_each.value AS TEXT)) LIKE '%' || ? || '%') ORDER BY id LIMIT ? OFFSET ?`)
+      : this.db.prepare(`SELECT row_json FROM ${table} ORDER BY id LIMIT ? OFFSET ?`);
+    const rows = normalized ? statement.all(normalized, limit, offset) : statement.all(limit, offset);
+    return rows.map(row => JSON.parse(row.row_json));
+  }
+
   read(file, fallback = []) {
     const item = Object.values(DATASETS).find(value => value.file === path.basename(file));
     if (!item) return Promise.reject(new Error(`Không hỗ trợ đọc file dữ liệu: ${file}`));
@@ -326,6 +353,232 @@ class Database {
     });
     transaction();
     return Promise.resolve(rows);
+  }
+
+  rawTableForKind(kind) {
+    const table = { purchase:'purchase_raw', scan:'scan_raw', warehouse:'warehouse_raw', workshop:'workshop_raw' }[kind];
+    if (!table) throw new Error('Loại dữ liệu không được phép nhập theo lô.');
+    return table;
+  }
+
+  async beginRawImport(kind, source) {
+    this.ensureOpen();
+    this.rawTableForKind(kind);
+    const importId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    this.db.prepare('INSERT INTO import_sessions(import_id,kind,source_json,created_at) VALUES (?,?,?,?)')
+      .run(importId, kind, JSON.stringify(source || {}), new Date().toISOString());
+    return importId;
+  }
+
+  async importRawBatch(kind, incoming, importId) {
+    this.ensureOpen();
+    const table = this.rawTableForKind(kind);
+    const rows = incoming || [];
+    if (importId) {
+      const session = this.db.prepare('SELECT kind FROM import_sessions WHERE import_id=?').get(importId);
+      if (!session || session.kind !== kind) throw new Error('Phiên nhập dữ liệu không hợp lệ hoặc đã kết thúc.');
+      const statement = this.db.prepare('INSERT INTO import_staging(import_id,record_key,row_json) VALUES (?,?,?) ON CONFLICT(import_id,record_key) DO UPDATE SET row_json=excluded.row_json');
+      const transaction = this.db.transaction(() => {
+        for (const row of rows) statement.run(importId, this.rawKey(row), JSON.stringify(row));
+      });
+      transaction();
+      return { stored:rows.length };
+    }
+
+    const statement = this.db.prepare(`INSERT INTO ${table}(record_key,row_json) VALUES (?,?) ON CONFLICT(record_key) DO UPDATE SET row_json=excluded.row_json`);
+    const transaction = this.db.transaction(() => {
+      for (const row of rows) statement.run(this.rawKey(row), JSON.stringify(row));
+    });
+    transaction();
+    return { stored:rows.length };
+  }
+
+  async commitRawImport(kind, importId) {
+    this.ensureOpen();
+    const table = this.rawTableForKind(kind);
+    const session = this.db.prepare('SELECT kind,source_json FROM import_sessions WHERE import_id=?').get(importId);
+    if (!session || session.kind !== kind) throw new Error('Phiên nhập dữ liệu không hợp lệ hoặc đã kết thúc.');
+    const source = JSON.parse(session.source_json || '{}');
+    const sourceFile = norm(source.path || source.file || source.name);
+    const stagedCount = this.db.prepare('SELECT COUNT(*) AS count FROM import_staging WHERE import_id=?');
+    const copyStaged = this.db.prepare(`INSERT INTO ${table}(record_key,row_json) SELECT record_key,row_json FROM import_staging WHERE import_id=? ON CONFLICT(record_key) DO UPDATE SET row_json=excluded.row_json`);
+    const deletePreviousSource = this.db.prepare(`DELETE FROM ${table} WHERE upper(trim(coalesce(json_extract(row_json, '$.sourceFile'), ''))) = ?`);
+    const deletePreviousSheet = this.db.prepare(`DELETE FROM ${table} WHERE upper(trim(coalesce(json_extract(row_json, '$.sourceFile'), ''))) = ? AND upper(trim(coalesce(json_extract(row_json, '$.sourceSheet'), ''))) = ?`);
+    const removeSession = this.db.prepare('DELETE FROM import_sessions WHERE import_id=?');
+    const stored = stagedCount.get(importId).count;
+    const transaction = this.db.transaction(() => {
+      // Re-importing selected sheets replaces exactly those old source rows. If no
+      // sheet was specified, the whole source file is intentionally refreshed.
+      const sourceName = norm(path.basename(source.path || source.file || source.name || '')) || sourceFile;
+      const sheets = Array.isArray(source.sheets) ? source.sheets.map(norm).filter(Boolean) : [];
+      if (sourceName && sheets.length) for (const sheet of sheets) deletePreviousSheet.run(sourceName, sheet);
+      else if (sourceName) deletePreviousSource.run(sourceName);
+      copyStaged.run(importId);
+      removeSession.run(importId);
+    });
+    transaction();
+    return { stored };
+  }
+
+  async discardRawImport(importId) {
+    this.ensureOpen();
+    this.db.prepare('DELETE FROM import_sessions WHERE import_id=?').run(importId);
+  }
+
+  async rebuildMergedFromRaw(kind, options = {}) {
+    if (kind === 'purchase') return this.rebuildPurchasesFromRaw(options);
+    if (kind === 'scan') return this.rebuildScansFromRaw(options);
+    if (kind === 'warehouse') return this.rebuildReceiptsFromRaw('warehouse', options);
+    if (kind === 'workshop') return this.rebuildReceiptsFromRaw('workshop', options);
+    throw new Error('Loại dữ liệu không được phép tổng hợp.');
+  }
+
+  forEachJsonRow(table, orderBy, visit) {
+    const statement = this.db.prepare(`SELECT row_json FROM ${table} ORDER BY ${orderBy} LIMIT ? OFFSET ?`);
+    const pageSize = 500;
+    for (let offset = 0;; offset += pageSize) {
+      const page = statement.all(pageSize, offset);
+      if (!page.length) return;
+      for (const entry of page) visit(JSON.parse(entry.row_json));
+      if (page.length < pageSize) return;
+    }
+  }
+
+  rebuildPurchasesFromRaw({ includeRows = true } = {}) {
+    const orderBy = `upper(trim(coalesce(json_extract(row_json, '$.purchaseOrder'), ''))),
+      upper(trim(coalesce(json_extract(row_json, '$.itemCode'), ''))), id`;
+    const insert = this.db.prepare(`INSERT INTO purchases(record_key,row_json) VALUES (?,?)`);
+    const clear = this.db.prepare('DELETE FROM purchases');
+    let current = null;
+    let count = 0;
+    const write = () => {
+      if (!current) return;
+      const row = {
+        ...current.row,
+        quantity:current.quantity,
+        remainingQuantity:current.remainingQuantities.join('; '),
+        mergedRowCount:current.mergedRowCount,
+        supplier:current.suppliers.join('; '),
+        note:current.mergedRowCount > 1
+          ? `Gộp ${current.mergedRowCount} dòng${current.sourceLocations.length ? `: ${current.sourceLocations.join('; ')}` : ''}`
+          : (current.row.note || '')
+      };
+      insert.run(this.purchaseKey(row), JSON.stringify(row));
+      count++;
+    };
+    const accept = row => {
+      const key = this.purchaseKey(row);
+      if (!current || current.key !== key) {
+        write();
+        const location = [row.sourceFile, row.sourceSheet ? `[${row.sourceSheet}]` : '', row.sourceRow !== undefined && row.sourceRow !== '' ? `dòng ${row.sourceRow}` : ''].filter(Boolean).join(' ');
+        current = { key, row:{ ...row }, quantity:Number(row.quantity) || 0, remainingQuantities:row.remainingQuantity ? [row.remainingQuantity] : [], mergedRowCount:Number(row.mergedRowCount) || 1, suppliers:row.supplier ? [row.supplier] : [], sourceLocations:location ? [location] : [] };
+        return;
+      }
+      current.quantity += Number(row.quantity) || 0;
+      current.mergedRowCount += Number(row.mergedRowCount) || 1;
+      if (row.remainingQuantity && !current.remainingQuantities.includes(row.remainingQuantity)) current.remainingQuantities.push(row.remainingQuantity);
+      if (row.supplier && !current.suppliers.some(value => norm(value) === norm(row.supplier))) current.suppliers.push(row.supplier);
+      const location = [row.sourceFile, row.sourceSheet ? `[${row.sourceSheet}]` : '', row.sourceRow !== undefined && row.sourceRow !== '' ? `dòng ${row.sourceRow}` : ''].filter(Boolean).join(' ');
+      if (location && !current.sourceLocations.includes(location)) current.sourceLocations.push(location);
+    };
+    const transaction = this.db.transaction(() => {
+      clear.run();
+      this.forEachJsonRow('purchase_raw', orderBy, accept);
+      write();
+    });
+    transaction();
+    return { rows:includeRows ? this.tableRows('purchases') : [], stats:{ total:count } };
+  }
+
+  rebuildScansFromRaw({ includeRows = true } = {}) {
+    const rows = this.db.prepare(`SELECT row_json FROM scan_raw ORDER BY
+      upper(trim(coalesce(json_extract(row_json, '$.projectCode'), ''))),
+      upper(trim(coalesce(json_extract(row_json, '$.drawingCode'), ''))),
+      upper(trim(coalesce(json_extract(row_json, '$.manufacturer'), ''))),
+      coalesce(json_extract(row_json, '$.scanDate'), ''), id`).iterate();
+    const insert = this.db.prepare(`INSERT INTO scans(record_key,row_json) VALUES (?,?)`);
+    const clear = this.db.prepare('DELETE FROM scans');
+    let current = null;
+    let count = 0;
+    const write = () => {
+      if (!current) return;
+      const row = {
+        ...current.row,
+        quantity:current.quantity,
+        mergedRowCount:current.mergedRowCount,
+        note:current.mergedRowCount > 1 ? `Gộp ${current.mergedRowCount} dòng` : '',
+        scanHistory:current.scanHistory
+      };
+      insert.run(this.datasetKey(row, ['projectCode','drawingCode','manufacturer','scanDate']), JSON.stringify(row));
+      count++;
+    };
+    const transaction = this.db.transaction(() => {
+      clear.run();
+      for (const entry of rows) {
+        const row = JSON.parse(entry.row_json);
+        if (row.invalidFormat) continue;
+        const key = this.datasetKey(row, ['projectCode','drawingCode','manufacturer','scanDate']);
+        if (!current || current.key !== key) {
+          write();
+          current = { key, row:{ ...row }, quantity:Number(row.quantity) || 0, mergedRowCount:1, scanHistory:row.scanDate ? [{ date:row.scanDate, quantity:Number(row.quantity) || 0 }] : [] };
+          continue;
+        }
+        current.quantity += Number(row.quantity) || 0;
+        current.mergedRowCount++;
+        if (row.scanDate) current.scanHistory.push({ date:row.scanDate, quantity:Number(row.quantity) || 0 });
+      }
+      write();
+    });
+    transaction();
+    return { rows:includeRows ? this.tableRows('scans') : [], stats:{ total:count } };
+  }
+
+  rebuildReceiptsFromRaw(kind, { includeRows = true } = {}) {
+    const table = kind === 'warehouse' ? 'warehouse_raw' : 'workshop_raw';
+    const output = kind === 'warehouse' ? 'warehouse' : 'workshop';
+    const fields = kind === 'warehouse'
+      ? ['projectCode','itemCode','supplier','poNumber','dueDate','deliveryDate']
+      : ['projectCode','itemCode','purchaseRequest','poNumber','prDate','dueDate','deliveryDate'];
+    const order = fields.map(field => `upper(trim(coalesce(json_extract(row_json, '$.${field}'), '')))`);
+    const rows = this.db.prepare(`SELECT row_json FROM ${table} ORDER BY ${order.join(', ')}, id`).iterate();
+    const insert = this.db.prepare(`INSERT INTO ${output}(record_key,row_json) VALUES (?,?)`);
+    const clear = this.db.prepare(`DELETE FROM ${output}`);
+    let current = null;
+    let count = 0;
+    const write = () => {
+      if (!current) return;
+      const shortageQuantity = Math.max(current.orderedQuantity - current.receivedQuantity, 0);
+      const row = {
+        ...current.row,
+        orderedQuantity:current.orderedQuantity,
+        receivedQuantity:current.receivedQuantity,
+        mergedRowCount:current.mergedRowCount,
+        note:current.mergedRowCount > 1 ? `Gộp ${current.mergedRowCount} dòng` : '',
+        shortageQuantity,
+        isShortage:shortageQuantity > 0
+      };
+      insert.run(this.datasetKey(row, fields), JSON.stringify(row));
+      count++;
+    };
+    const transaction = this.db.transaction(() => {
+      clear.run();
+      for (const entry of rows) {
+        const row = JSON.parse(entry.row_json);
+        if (!text(row.projectCode)) continue;
+        const key = this.datasetKey(row, fields);
+        if (!current || current.key !== key) {
+          write();
+          current = { key, row:{ ...row }, orderedQuantity:Number(row.orderedQuantity) || 0, receivedQuantity:Number(row.receivedQuantity) || 0, mergedRowCount:Number(row.mergedRowCount) || 1 };
+          continue;
+        }
+        current.orderedQuantity += Number(row.orderedQuantity) || 0;
+        current.receivedQuantity += Number(row.receivedQuantity) || 0;
+        current.mergedRowCount += Number(row.mergedRowCount) || 1;
+      }
+      write();
+    });
+    transaction();
+    return { rows:includeRows ? this.tableRows(output) : [], stats:{ total:count } };
   }
 
   async mergeRaw(file, incoming) {

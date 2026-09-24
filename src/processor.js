@@ -43,14 +43,25 @@ async function* workbookSheets(file, selectedSheets) {
   }
 }
 
+async function* streamWorkbookSheets(file, selectedSheets) {
+  const selected = new Set((selectedSheets || []).map(norm));
+  const reader = new ExcelJS.stream.xlsx.WorkbookReader(file, {
+    worksheets:'emit', sharedStrings:'cache', styles:'ignore', hyperlinks:'ignore', entries:'ignore'
+  });
+  for await (const worksheet of reader) {
+    if (!selected.size || selected.has(norm(worksheet.name))) yield worksheet;
+  }
+}
+
 async function listWorkbookSheets(file) {
+  // Some workbooks contain a styled cell at Excel's final row. ExcelJS's streaming
+  // reader cannot resolve that malformed/oversized relationship reliably, while the
+  // non-streaming reader can inspect sheet metadata without materializing all rows.
   const workbook = new ExcelJS.Workbook();
   const options = { ignoreNodes: ['dataValidations','hyperlinks','printOptions','pageMargins','pageSetup','headerFooter','drawing','picture','sheetProtection','conditionalFormatting','extLst'] };
   if (typeof file === 'string') await workbook.xlsx.readFile(file, options);
   else await workbook.xlsx.load(file instanceof ArrayBuffer ? new Uint8Array(file) : file, options);
-  // rowCount follows Excel's formatted range and can report 1,048,576 when a
-  // style reaches the last row. actualRowCount reflects rows containing values.
-  return workbook.worksheets.map(worksheet => ({ name: worksheet.name, rowCount: worksheet.actualRowCount }));
+  return workbook.worksheets.map(worksheet => ({ name:worksheet.name, rowCount:worksheet.actualRowCount }));
 }
 function worksheetRows(worksheet) {
   const rows = [];
@@ -518,6 +529,173 @@ function sourceSpec(source) {
   return { file: source.data || source.path, sourceName:source.name || source.path, sheets: source.sheets || [] };
 }
 
+async function streamFileRows(kind, source, onBatch, { batchSize = 500 } = {}) {
+  const { file, sourceName, sheets } = sourceSpec(source);
+  const batch = [];
+  const warnings = [];
+  let processed = 0;
+  let emitted = 0;
+  let warningCount = 0;
+  let hasSheet = false;
+  let foundHeader = false;
+  let currentScanMarker = null;
+  let firstScanMarkerSeen = false;
+  const pendingBeforeFirstMarker = [];
+
+  const flush = async force => {
+    if (!force && batch.length < batchSize && warnings.length < batchSize) return;
+    if (!batch.length && !warnings.length) return;
+    const rows = batch.splice(0, batch.length);
+    const batchWarnings = warnings.splice(0, warnings.length);
+    await onBatch(rows, batchWarnings, { processed, emitted });
+  };
+  const emit = async row => {
+    batch.push(row);
+    emitted++;
+    await flush(false);
+  };
+  const addWarning = async value => {
+    warnings.push(value);
+    warningCount++;
+    await flush(false);
+  };
+
+  const parsePurchase = async (worksheet, r, state) => {
+    const required = [['Mã hàng'], ['ĐVT'], ['Maker', 'Marker'], ['Tình trạng']];
+    if (!state.header) {
+      if (r.rowNo > 30) return;
+      if (isHeader(r, required)) {
+        state.header = r;
+        state.map = headerMap(r);
+        foundHeader = true;
+      }
+      return;
+    }
+    const purchaseOrder = clean(getBy(state.map, r.values, ['Mã hàng']));
+    const itemCode = clean(getBy(state.map, r.values, ['ĐVT']));
+    if (!purchaseOrder && !itemCode) return;
+    await emit({
+      projectCode:projectCode(purchaseOrder), purchaseOrder, itemCode,
+      itemName:clean(getBy(state.map, r.values, ['Maker', 'Marker'])),
+      marker:clean(getBy(state.map, r.values, ['Maker', 'Marker'])),
+      supplier:purchaseSupplier(state.map, r.values),
+      quantity:number(getBy(state.map, r.values, ['Tình trạng'])),
+      remainingQuantity:purchaseRemainingQuantity(state.map, r.values),
+      sourceFile:basename(sourceName || file), sourceSheet:worksheet.name || '', sourceRow:r.rowNo
+    });
+  };
+
+  const parseWarehouse = async (worksheet, r, state) => {
+    const columns = {
+      projectName:['Tên dự án'], itemCode:['Mã Hàng', 'Mã hàng'], itemName:['Tên Hàng', 'Tên hàng'], supplier:['NCC'],
+      poNumber:['Mã PO', 'Số PO', 'PO', 'PO No', 'PO No.', 'PO Number', 'Mã đơn hàng'],
+      orderedQuantity:['Số lượng đặt hàng'], dueDate:['Hạn giao hàng'], deliveryDate:['Ngày giao hàng'], receivedQuantity:['Số lượng đã về']
+    };
+    const required = Object.entries(columns).filter(([key]) => key !== 'poNumber').map(([, names]) => names);
+    if (!state.header) {
+      if (r.rowNo > 30) return;
+      if (isHeader(r, required)) {
+        state.header = r;
+        state.map = headerMap(r);
+        foundHeader = true;
+      }
+      return;
+    }
+    const row = Object.fromEntries(Object.entries(columns).map(([key, names]) => [key, cellValue(getBy(state.map, r.values, names))]));
+    if (!clean(row.itemCode)) return;
+    row.projectName = clean(row.projectName); row.itemCode = clean(row.itemCode); row.itemName = clean(row.itemName); row.supplier = clean(row.supplier); row.poNumber = clean(row.poNumber);
+    row.projectCode = projectCode(row.projectName);
+    if (!row.projectCode) await addWarning(warning('Nhập Kho', '', row.projectName || row.itemCode, `${worksheet.name || 'Sheet'} dòng ${r.rowNo}: không trích xuất được mã dự án MEC... hoặc AUT...; vẫn giữ dòng Nhập Kho trong file gốc để kiểm tra`, file));
+    row.orderedQuantity = number(row.orderedQuantity); row.receivedQuantity = number(row.receivedQuantity);
+    row.dueDate = parseDmyDate(row.dueDate); row.deliveryDate = parseDmyDate(row.deliveryDate);
+    row.sourceFile = basename(sourceName || file); row.sourceSheet = worksheet.name || ''; row.sourceRow = r.rowNo;
+    await emit(row);
+  };
+
+  const parseWorkshop = async (worksheet, r, state) => {
+    if (!state.header) {
+      if (r.rowNo > 30) return;
+      const names = r.values.map(headerKey);
+      if (names[2] === 'STT' && names[3] === 'MKS' && names[4] === 'MA HANG' && names[5] === 'TEN HANG') {
+        state.header = r;
+        foundHeader = true;
+      }
+      return;
+    }
+    const itemCode = clean(r.values[4]);
+    if (!itemCode) return;
+    const poNumber = clean(r.values[1]);
+    const purchaseRequest = clean(r.values[3]);
+    const extractedProject = projectCode(purchaseRequest) || projectCode(poNumber);
+    if (!extractedProject) await addWarning(warning('Xưởng Gia Công', '', itemCode, `${worksheet.name || 'Sheet'} dòng ${r.rowNo}: không trích xuất được mã dự án MEC... hoặc AUT...; vẫn giữ dòng XGC để kiểm tra`, file));
+    await emit({
+      projectCode:extractedProject, projectName:purchaseRequest || poNumber, purchaseRequest, poNumber,
+      prDate:parseDmyDate(r.values[2]), itemCode, itemName:clean(r.values[5]), supplier:'Xưởng gia công',
+      orderedQuantity:number(r.values[7]), dueDate:parseDmyDate(r.values[8]), receivedQuantity:number(r.values[9]),
+      deliveryDate:parseDmyDate(r.values[10]), sourceKind:'workshop', sourceFile:basename(sourceName || file), sourceSheet:worksheet.name || '', sourceRow:r.rowNo
+    });
+  };
+
+  const addScan = async parsed => {
+    await emit({ ...parsed, mergedRowCount:1, note:'' });
+  };
+  const parseScan = async (worksheet, r) => {
+    let rowCells = r.values.map(cellValue).map(clean);
+    while (rowCells.length && clean(rowCells[0]) === '') rowCells.shift();
+    while (rowCells.length && clean(rowCells[rowCells.length - 1]) === '') rowCells.pop();
+    const value = rowCells.join(',');
+    if (!value) return;
+    const markerDate = rowCells.length === 1 && !value.includes(',') ? parseScanMarker(rowCells[0]) : null;
+    if (markerDate) {
+      if (!firstScanMarkerSeen) {
+        for (const row of pendingBeforeFirstMarker.splice(0)) await addScan({ ...row, scanDate:`Trước ${markerDate.display}`, scanDateSort:'' });
+        firstScanMarkerSeen = true;
+      }
+      currentScanMarker = markerDate;
+      return;
+    }
+    let normalized = rowCells.length > 1 ? [...rowCells] : value.split(',').map(clean);
+    if (normalized.length === 5) normalized = [normalized[0], normalized[1], normalized[2], normalized[3], '', normalized[4], ''];
+    else if (normalized.length === 6) normalized = [normalized[0], normalized[1], normalized[2], normalized[3], '', normalized[4], normalized[5]];
+    else if (normalized.length > 7) normalized = [normalized[0], normalized[1], normalized[2], normalized[3], normalized[4], normalized[5], normalized.slice(6).join(',')];
+    if (normalized.length !== 7) {
+      const fallback = normalized.length ? normalized : [value];
+      await addWarning(warning('Quét Mã', canonicalProject(fallback[0] || ''), fallback[1] || value, `${worksheet.name || 'Sheet'} dòng ${r.rowNo}: cần đúng 7 trường; vẫn giữ dòng Quét Mã trong file gốc để kiểm tra`, file));
+      await emit({ projectCode:canonicalProject(fallback[0]), drawingCode:fallback[1] || value, quantity:number(fallback[2]), manufacturer:fallback[3] || '', receiptCode:fallback[4] || '', warehouseDate:parseDmyDate(fallback[5]), reference:fallback.slice(6).join(','), scanDate:currentScanMarker?.display || '', scanDateSort:currentScanMarker?.sort || '', manualReview:true, invalidFormat:true, mergedRowCount:1, note:'Không đúng 7 trường', sourceFile:basename(sourceName || file), sourceSheet:worksheet.name || '', sourceRow:r.rowNo });
+      return;
+    }
+    let quantity, manufacturer, manualReview = false;
+    const p3num = /^\d+$/.test(normalized[2]), p4num = /^\d+$/.test(normalized[3]);
+    if (p3num && !p4num) { quantity = number(normalized[2]); manufacturer = normalized[3]; }
+    else if (!p3num && p4num) { quantity = number(normalized[3]); manufacturer = normalized[2]; }
+    else { quantity = number(normalized[2]); manufacturer = normalized[3]; manualReview = true; await addWarning(warning('Quét Mã', normalized[0], normalized[1], `${worksheet.name || 'Sheet'} dòng ${r.rowNo}: không xác định được thứ tự số lượng/NXS`, file)); }
+    const parsed = { projectCode:canonicalProject(normalized[0]), drawingCode:normalized[1], quantity, manufacturer, receiptCode:normalized[4], warehouseDate:parseDmyDate(normalized[5]), reference:normalized[6], scanDate:currentScanMarker?.display || '', scanDateSort:currentScanMarker?.sort || '', manualReview, sourceFile:basename(sourceName || file), sourceSheet:worksheet.name || '', sourceRow:r.rowNo };
+    if (!firstScanMarkerSeen) pendingBeforeFirstMarker.push(parsed);
+    else await addScan(parsed);
+  };
+
+  for await (const worksheet of streamWorkbookSheets(file, sheets)) {
+    hasSheet = true;
+    const state = {};
+    for await (const excelRow of worksheet) {
+      processed++;
+      const r = rowData(excelRow);
+      if (kind === 'purchase') await parsePurchase(worksheet, r, state);
+      else if (kind === 'scan') await parseScan(worksheet, r);
+      else if (kind === 'warehouse') await parseWarehouse(worksheet, r, state);
+      else if (kind === 'workshop') await parseWorkshop(worksheet, r, state);
+      else throw new Error('Loại file không được phép nhập theo luồng.');
+    }
+  }
+  if (kind === 'scan' && !firstScanMarkerSeen) {
+    for (const row of pendingBeforeFirstMarker.splice(0)) await addScan({ ...row, scanDate:'Chưa có ngày quét mã', scanDateSort:'' });
+  }
+  if (!hasSheet) throw new Error(`File ${basename(sourceName || file)} không có sheet dữ liệu.`);
+  if (['purchase', 'warehouse', 'workshop'].includes(kind) && !foundHeader) throw new Error(`${basename(sourceName || file)}: không tìm thấy hàng tiêu đề phù hợp trong 30 dòng đầu của bất kỳ sheet nào.`);
+  await flush(true);
+  return { processed, emitted, warningCount };
+}
+
 function status(q, bom) { const d = q - bom; return { status: d === 0 ? 'Đủ' : d < 0 ? `Thiếu (${Math.abs(d)})` : `Thừa (${d})`, delta: d }; }
 function candidate(target, rows, field) {
   let best = null;
@@ -964,4 +1142,4 @@ function prioritizeProjectWarnings(rows) {
   }).map(item => item.row);
 }
 
-module.exports = { processFiles, listWorkbookSheets, buildComparison, resolveReview, validateProjectCodes, filterPurchasesByProjectPrefix, prioritizeProjectWarnings, mergePurchaseRows, mergeWarehouseRows, mergeWorkshopRows, quantityComparisonNote, parseUsDate, parseDmyDate, parseScanMarker, projectCode, norm };
+module.exports = { processFiles, streamFileRows, listWorkbookSheets, buildComparison, resolveReview, validateProjectCodes, filterPurchasesByProjectPrefix, prioritizeProjectWarnings, mergePurchaseRows, mergeWarehouseRows, mergeWorkshopRows, quantityComparisonNote, parseUsDate, parseDmyDate, parseScanMarker, projectCode, norm };
