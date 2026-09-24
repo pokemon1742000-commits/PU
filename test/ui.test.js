@@ -12,6 +12,7 @@ const preload = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8'
 const exporter = fs.readFileSync(path.join(__dirname, '..', 'src', 'exporter.js'), 'utf8');
 const processor = fs.readFileSync(path.join(__dirname, '..', 'src', 'processor.js'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+const releaseNotes = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'release-notes.js'), 'utf8');
 const releaseAuto = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'release-auto.ps1'), 'utf8');
 const builtInJobCodeFile = path.join(__dirname, '..', 'assets', 'MKAC Monthly Timesheet.xlsx');
 const appLogoFile = path.join(__dirname, '..', 'assets', 'app-logo.png');
@@ -95,6 +96,14 @@ test('imports stream into SQLite with staging, progress, cancellation, and durab
   assert.match(js, /window\.api\.onImportProgress\(renderImportProgress\)/);
   assert.match(js, /window\.api\.cancelImport\(\)/);
   assert.match(main, /database\.clearWorkingSession\(\)/);
+  assert.match(main, /const previousSession = session/);
+  assert.match(main, /retainedLargeDatasets\.delete\('scans'\)/);
+  assert.match(main, /retainedLargeDatasets\.delete\('scan_raw'\)/);
+  assert.match(main, /applyThresholdSettings\(workingSession\)/);
+  const clearHandler = main.match(/ipcMain\.handle\('session:clear'[\s\S]*?(?=ipcMain\.handle\('database:delete')/)?.[0] || '';
+  assert.doesNotMatch(clearHandler, /database\.readPurchases\(\)/);
+  assert.doesNotMatch(clearHandler, /readBuiltInJobCodeReference\(\)/);
+  assert.match(js, /const result=await window\.api\.clearSession\(\);await refresh\(result\);[\s\S]*await loadTablePage\(1\)/);
   assert.match(main, /decisions:new Map\(workingSession\.decisions \|\| \[\]\)/);
   assert.match(js, /Dữ liệu Mua Hàng, Nhập Kho và Xưởng Gia Công sẽ được giữ lại/);
 });
@@ -149,7 +158,7 @@ test('tables provide one centered numbered pagination above the data', () => {
   assert.match(css, /\.page-icon/);
   assert.match(css, /border-radius: 50%/);
   assert.match(css, /\.pagination[\s\S]*justify-content: center/);
-  assert.match(css, /\.page-summary[\s\S]*position: absolute[\s\S]*left: 2px/);
+  assert.match(css, /\.page-summary[\s\S]*position: absolute[\s\S]*left: 50%/);
   assert.match(css, /#data\.active[\s\S]*overflow: hidden/);
   assert.match(css, /#data \.discrepancy-block \.table-wrap[\s\S]*max-height: none/);
 });
@@ -225,6 +234,8 @@ test('information dialog includes a detailed first-use guide with one screenshot
   for (const title of ['Bắt đầu và nạp dữ liệu','Đọc dữ liệu và tinh chỉnh đối chiếu','Xác nhận và xem kết quả','Các chức năng quản trị dữ liệu','Gặp lỗi thì xử lý theo thứ tự này']) assert.match(html, new RegExp(title));
   const guideFiles = ['guide-01-import.png','guide-02-sheet-picker.png','guide-03-table-tools.png','guide-04-threshold-theme.png','guide-05-confirm.png','guide-06-results-export.png','guide-07-replacements.png','guide-08-database.png','guide-09-export.png'];
   for (const file of guideFiles) assert.match(html, new RegExp(file.replace('.', '\\.'), 'g'));
+  assert.match(releaseNotes, /1\.0\.31/);
+  assert.match(releaseNotes, /1\.0\.12/);
   assert.match(js, /function showInfoPanel\(panelId\)/);
   assert.match(css, /\.guide-feature/);
   assert.match(css, /\.guide-troubleshooting/);
@@ -347,37 +358,45 @@ test('application exposes actual-data audit and a separate non-destructive techn
   assert.match(js, /report\.ok\?'ĐẠT':'KHÔNG ĐẠT'/);
 });
 
-test('updates wait for explicit restart confirmation', () => {
-  assert.match(main, /Bản cập nhật đã sẵn sàng/);
-  assert.match(main, /Cài đặt và khởi động lại/);
-  assert.match(main, /choice === 0/);
-  assert.doesNotMatch(main, /setTimeout\(\(\) => autoUpdater\.quitAndInstall/);
+test('selected versions wait for explicit restart confirmation', () => {
+  assert.match(js, /if\(!confirm\(`\$\{label\} phiên bản v\$\{version\}\?/);
+  assert.match(main, /Cài bản \$\{label\} và khởi động lại/);
+  assert.match(main, /choice !== 0/);
+  assert.match(main, /setTimeout\(\(\) => app\.quit\(\), 250\)/);
+  assert.doesNotMatch(main, /autoUpdater/);
 });
 
 test('installed app exposes separate Update and Restore controls', () => {
   assert.match(html, /id="updateBtn"/);
   assert.match(html, /id="restoreBtn"/);
-  assert.match(html, /Restore bản stable ngay trước latest/);
-  assert.match(preload, /update:check/);
-  assert.match(preload, /update:rollback/);
-  assert.match(js, /window\.api\.restorePreviousVersion\(\)/);
+  assert.match(html, /Chọn và cài đặt một phiên bản cũ hơn/);
+  assert.match(preload, /update:list-versions/);
+  assert.match(preload, /update:install-version/);
+  assert.match(js, /openVersionPicker\('rollback'\)/);
   assert.match(js, /rollback-downloading/);
-  assert.match(main, /ipcMain\.handle\('update:rollback'/);
-  assert.match(main, /selectPreviousRelease/);
+  assert.match(main, /ipcMain\.handle\('update:list-versions'/);
+  assert.match(main, /ipcMain\.handle\('update:install-version'/);
+  assert.match(preload, /listUpdateVersions/);
+  assert.match(preload, /listRestoreVersions/);
+  assert.match(js, /openVersionPicker/);
+  assert.match(html, /id="versionPicker"/);
+  assert.match(main, /selectReleaseForOperation/);
   assert.match(main, /selectInstallerAsset/);
-  assert.match(main, /rollbackPreviousVersion/);
+  assert.match(main, /installSelectedVersion/);
   assert.match(main, /spawn\(temporaryFile/);
   assert.match(main, /toàn bộ dữ liệu SQLite cũ sẽ được xóa/);
-  assert.match(js, /toàn bộ dữ liệu SQLite cũ sẽ bị xóa/);
+  assert.match(js, /dữ liệu SQLite của phiên bản hiện tại sẽ được xóa/);
 });
 
-test('installed app exposes a silent GitHub update button and automated release command', () => {
+test('installed app exposes selectable GitHub versions and automated release command', () => {
   assert.match(html, /id="updateBtn"/);
-  assert.match(preload, /update:check/);
+  assert.match(preload, /update:list-versions/);
+  assert.match(preload, /update:install-version/);
   assert.match(preload, /update:status/);
-  assert.match(main, /checkForUpdates/);
-  assert.match(main, /downloadUpdate/);
-  assert.match(main, /quitAndInstall\(true, true\)/);
+  assert.match(main, /listAvailableVersions/);
+  assert.match(main, /installSelectedVersion/);
+  assert.match(main, /selectReleaseForOperation/);
+  assert.match(main, /spawn\(temporaryFile/);
   assert.equal(packageJson.scripts['release:auto'], 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-auto.ps1');
   assert.equal(packageJson.build.publish.owner, 'pokemon1742000-commits');
   assert.equal(packageJson.build.publish.repo, 'PU');

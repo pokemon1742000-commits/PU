@@ -949,8 +949,8 @@ function buildComparison(purchases, scans, warehouse, threshold = 91, decisions 
         status:confirmationStatus
       });
     }
-    const matchedPurchases = purchaseMatch.code ? projectPurchases.filter(row => norm(row.itemCode) === purchaseMatch.code) : [];
-    const matchedWarehouse = warehouseMatch.code ? projectWarehouse.filter(row => norm(row.itemCode) === warehouseMatch.code) : [];
+    const matchedPurchases = purchaseMatch.code ? (purchaseIndex.groups.get(sourceItemKey(project, purchaseMatch.code)) || []) : [];
+    const matchedWarehouse = warehouseMatch.code ? (warehouseIndex.groups.get(sourceItemKey(project, warehouseMatch.code)) || []) : [];
     const scanQuantity = number(scan.quantity);
     const purchaseQuantity = sum(matchedPurchases, 'quantity');
     const warehouseQuantity = sum(matchedWarehouse, 'receivedQuantity');
@@ -1085,20 +1085,24 @@ function groupSourceItems(rows) {
 
 function comparisonSourceIndex(rows) {
   if (Array.isArray(rows) && comparisonSourceCache.has(rows)) return comparisonSourceCache.get(rows);
-  const byProject = new Map(), itemNameKeys = new Map();
+  const byProject = new Map(), groups = new Map(), itemNameKeys = new Map();
   for (const row of rows || []) {
-    const project = canonicalProject(row.projectCode);
+    const project = canonicalProject(row.projectCode), itemCode = norm(row.itemCode);
     if (!project) continue;
     if (!byProject.has(project)) byProject.set(project, []);
     byProject.get(project).push(row);
-    const itemName = norm(row.itemName), itemKey = sourceItemKey(project, row.itemCode);
-    if (itemName && norm(row.itemCode)) {
+    if (!itemCode) continue;
+    const itemKey = `${project}|${itemCode}`;
+    if (!groups.has(itemKey)) groups.set(itemKey, []);
+    groups.get(itemKey).push(row);
+    const itemName = norm(row.itemName);
+    if (itemName) {
       const lookupKey = `${project}|${itemName}`;
       if (!itemNameKeys.has(lookupKey)) itemNameKeys.set(lookupKey, new Set());
       itemNameKeys.get(lookupKey).add(itemKey);
     }
   }
-  const index = { byProject, groups: groupSourceItems(rows), itemNameKeys };
+  const index = { byProject, groups, itemNameKeys };
   if (Array.isArray(rows)) comparisonSourceCache.set(rows, index);
   return index;
 }
@@ -1153,4 +1157,4 @@ function prioritizeProjectWarnings(rows) {
   }).map(item => item.row);
 }
 
-module.exports = { processFiles, streamFileRows, listWorkbookSheets, buildComparison, resolveReview, validateProjectCodes, filterPurchasesByProjectPrefix, prioritizeProjectWarnings, mergePurchaseRows, mergeWarehouseRows, mergeWorkshopRows, quantityComparisonNote, parseUsDate, parseDmyDate, parseScanMarker, projectCode, norm };
+module.exports = { processFiles, streamFileRows, listWorkbookSheets, buildComparison, resolveReview, validateProjectCodes, filterPurchasesByProjectPrefix, prioritizeProjectWarnings, mergePurchaseRows, mergeWarehouseRows, mergeWorkshopRows, quantityComparisonNote, parseUsDate, parseDmyDate, parseScanMarker, projectCode, canonicalProject, norm };

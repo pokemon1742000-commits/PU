@@ -4,7 +4,9 @@ const fs = require('fs/promises');
 const os = require('os');
 const path = require('path');
 const ExcelJS = require('exceljs');
-const { exportWorkbook } = require('../src/exporter');
+const { Database } = require('../src/storage');
+const { exportWorkbook, exportWorkbookLarge } = require('../src/exporter');
+const { canonicalProject } = require('../src/processor');
 
 test('comparison export follows the single-sheet template, excludes confirmations, and colors XK cells', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'comparison-export-'));
@@ -123,6 +125,105 @@ test('comparison export strikes an old linked code and shows the new code', asyn
   assert.equal(prNote.richText[0].text, 'PR-OLD');
   assert.equal(prNote.richText[0].font.strike, true);
   assert.equal(prNote.richText[1].text, ' → PR-NEW');
+});
+
+test('large database export streams selected sheets and preserves canonical project variants', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'large-export-'));
+  const database = new Database(dir);
+  await database.init();
+  t.after(async () => { await database.close(); await fs.rm(dir, { recursive:true, force:true }); });
+
+  await database.mergePurchases([{
+    projectCode:'Project MEC1', purchaseOrder:'PR-1', itemCode:'ITEM-1', itemName:'Item 1', quantity:4
+  }]);
+  await database.mergeScans([{
+    projectCode:'MEC1', drawingCode:'ITEM-1', manufacturer:'Maker', scanDate:'24/Sep', quantity:4
+  }]);
+  await database.mergeWarehouse([{
+    projectCode:'Tên dự án MEC1', itemCode:'ITEM-1', itemName:'Item 1', supplier:'NCC', poNumber:'PO-1',
+    orderedQuantity:4, receivedQuantity:4, dueDate:'24/09/2026', deliveryDate:'24/09/2026'
+  }]);
+
+  const puFile = path.join(dir, 'pu.xlsx');
+  await exportWorkbookLarge(puFile, ['pu'], {
+    database,
+    canonicalizeProject: canonicalProject
+  });
+  const puWorkbook = new ExcelJS.Workbook();
+  await puWorkbook.xlsx.readFile(puFile);
+  assert.deepEqual(puWorkbook.worksheets.map(sheet => sheet.name), ['MEC1']);
+  assert.deepEqual(puWorkbook.getWorksheet('MEC1').getRow(10).values.slice(1, 7), [1, 'MEC1', 'ITEM-1', 'Item 1', 4, 4]);
+  assert.equal(puWorkbook.getWorksheet('MEC1').getCell('K10').value, 'OK');
+
+  const sourceFile = path.join(dir, 'source.xlsx');
+  await exportWorkbookLarge(sourceFile, ['source'], { database, canonicalizeProject: value => require('../src/processor').canonicalProject(value) });
+  const sourceWorkbook = new ExcelJS.Workbook();
+  await sourceWorkbook.xlsx.readFile(sourceFile);
+  assert.deepEqual(sourceWorkbook.worksheets.map(sheet => sheet.name), ['PR vs PO + XGC']);
+  const sourceSheet = sourceWorkbook.getWorksheet('PR vs PO + XGC');
+  assert.equal(sourceSheet.rowCount, 10);
+  assert.deepEqual(sourceSheet.getRow(10).values.slice(1, 12), [1, 'MEC1', 'ITEM-1', 'Item 1', 4, 4, 4, 0, 0, 4, 0]);
+});
+
+test('large PU export compares each project once and writes scan rows before missing rows', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'large-export-order-'));
+  t.after(() => fs.rm(dir, { recursive:true, force:true }));
+  const calls = [];
+  const rows = {
+    purchases: [
+      { projectCode:'Project MEC1', purchaseOrder:'PR-SCAN', itemCode:'ITEM-1', itemName:'Scanned item', quantity:2 },
+      { projectCode:'MEC1', purchaseOrder:'PR-MISSING', itemCode:'ITEM-2', itemName:'Missing item', quantity:3 }
+    ],
+    scans: [{ projectCode:'MEC1', drawingCode:'ITEM-1', quantity:2 }],
+    warehouse: [{ projectCode:'Tên dự án MEC1', itemCode:'ITEM-1', orderedQuantity:2, receivedQuantity:2 }],
+    workshop: []
+  };
+  const database = {
+    async listProjectsInTableOrder(tables) {
+      return tables.length === 1 && tables[0] === 'scans' ? ['MEC1'] : ['Project MEC1', 'MEC1'];
+    },
+    async readTableRowsByProject(table, project) {
+      calls.push({ table, project });
+      return rows[table] || [];
+    }
+  };
+  const file = path.join(dir, 'ordered.xlsx');
+  await exportWorkbookLarge(file, ['pu'], { database, canonicalizeProject:canonicalProject });
+  assert.deepEqual(calls, [
+    { table:'purchases', project:'MEC1' }, { table:'scans', project:'MEC1' },
+    { table:'warehouse', project:'MEC1' }, { table:'workshop', project:'MEC1' }
+  ]);
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(file);
+  const sheet = workbook.getWorksheet('MEC1');
+  assert.equal(sheet.rowCount, 11);
+  assert.deepEqual([sheet.getCell('C10').value, sheet.getCell('C11').value], ['ITEM-1', 'ITEM-2']);
+  assert.equal(sheet.getCell('K10').value, 'OK');
+  assert.equal(sheet.getCell('K11').value, 'Chưa về');
+});
+
+test('large export uses grouped rows once and preserves canonical project variants', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'large-export-grouped-'));
+  t.after(() => fs.rm(dir, { recursive:true, force:true }));
+  const calls = [];
+  const grouped = {
+    projects:['MEC1'],
+    tables:new Map([
+      ['purchases', new Map([['MEC1', [{ projectCode:'Project MEC1', purchaseOrder:'PR-1', itemCode:'ITEM-1', itemName:'Item', quantity:2 }]]])],
+      ['scans', new Map([['MEC1', [{ projectCode:'MEC1', drawingCode:'ITEM-1', quantity:2 }]]])],
+      ['warehouse', new Map([['MEC1', [{ projectCode:'Tên dự án MEC1', itemCode:'ITEM-1', orderedQuantity:2, receivedQuantity:2 }]]])],
+      ['workshop', new Map([['MEC1', []]])]
+    ])
+  };
+  const database = {
+    async readTablesGroupedByProject(tables) { calls.push(tables); return grouped; }
+  };
+  const file = path.join(dir, 'grouped.xlsx');
+  await exportWorkbookLarge(file, ['pu', 'source'], { database, canonicalizeProject:canonicalProject });
+  assert.deepEqual(calls, [['purchases', 'scans', 'warehouse', 'workshop']]);
+  const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile(file);
+  assert.equal(workbook.getWorksheet('MEC1').getCell('K10').value, 'OK');
+  assert.equal(workbook.getWorksheet('PR vs PO + XGC').getCell('C10').value, 'ITEM-1');
 });
 
 test('export adds a PR versus PO and XGC sheet with quantity and code checks', async t => {

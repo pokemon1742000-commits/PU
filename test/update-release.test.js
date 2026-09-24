@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 const {
   listStableReleases,
   selectPreviousRelease,
+  releasesForOperation,
+  selectReleaseForOperation,
   selectInstallerAsset,
   installerName
 } = require('../src/update-release');
@@ -54,6 +56,26 @@ test('rollback refuses when selected previous release is not older than current'
   ], '1.0.25');
   assert.equal(result.previous, null);
   assert.equal(result.reason, 'previous-is-not-older-than-current');
+});
+
+test('update and restore version lists follow the current version', () => {
+  const releases = [release('1.0.31', '2026-09-24T00:00:00Z'), release('1.0.30', '2026-09-23T00:00:00Z'), release('1.0.29', '2026-09-22T00:00:00Z'), release('1.0.28', '2026-09-21T00:00:00Z')];
+  assert.deepEqual(releasesForOperation(releases, '1.0.29', 'update').map(item => item.version), ['1.0.31', '1.0.30']);
+  assert.deepEqual(releasesForOperation(releases, '1.0.29', 'rollback').map(item => item.version), ['1.0.28']);
+  assert.equal(selectReleaseForOperation(releases, '1.0.29', 'rollback', '1.0.28').version, '1.0.28');
+  assert.equal(selectReleaseForOperation(releases, '1.0.29', 'rollback', '1.0.30'), null);
+});
+
+test('rollback can be selected repeatedly after moving to an older version', () => {
+  const releases = [
+    release('1.0.31', '2026-09-24T00:00:00Z'),
+    release('1.0.30', '2026-09-23T00:00:00Z'),
+    release('1.0.29', '2026-09-22T00:00:00Z'),
+    release('1.0.28', '2026-09-21T00:00:00Z')
+  ];
+  assert.deepEqual(releasesForOperation(releases, '1.0.30', 'rollback').map(item => item.version), ['1.0.29', '1.0.28']);
+  assert.deepEqual(releasesForOperation(releases, '1.0.29', 'rollback').map(item => item.version), ['1.0.28']);
+  assert.equal(selectReleaseForOperation(releases, '1.0.29', 'rollback', '1.0.28').version, '1.0.28');
 });
 
 test('installer selection requires exact setup name and GitHub release URL', () => {

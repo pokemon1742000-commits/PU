@@ -15,9 +15,9 @@ async function readBounded(database, table, maxRows, largeDatasets) {
   const total = await database.countTableRows(table);
   if (total > maxRows) {
     largeDatasets.push(table);
-    return [];
+    return { rows:[], total };
   }
-  return database.readTablePage(table, { limit:maxRows });
+  return { rows:await database.readTablePage(table, { limit:maxRows }), total };
 }
 
 async function finalizeImport({
@@ -41,23 +41,27 @@ async function finalizeImport({
     const merged = await database.rebuildMergedFromRaw(kind, { includeRows:false });
 
     onProgress?.({ phase:'refreshing', cancelable:false });
-    const purchaseAll = await readBounded(database, 'purchases', maxSessionRows, largeDatasets);
-    const scans = await readBounded(database, 'scans', maxSessionRows, largeDatasets);
-    const warehouse = await readBounded(database, 'warehouse', maxSessionRows, largeDatasets);
-    const workshop = await readBounded(database, 'workshop', maxSessionRows, largeDatasets);
-    const purchaseRawTotal = await database.countTableRows('purchase_raw');
-    const purchaseDetails = purchaseRawTotal > maxSessionRows
-      ? []
-      : await database.readTablePage('purchase_raw', { limit:maxSessionRows });
-    if (purchaseRawTotal > maxSessionRows && !largeDatasets.includes('purchase_raw')) largeDatasets.push('purchase_raw');
+    const purchaseBounded = await readBounded(database, 'purchases', maxSessionRows, largeDatasets);
+    const scansBounded = await readBounded(database, 'scans', maxSessionRows, largeDatasets);
+    const warehouseBounded = await readBounded(database, 'warehouse', maxSessionRows, largeDatasets);
+    const workshopBounded = await readBounded(database, 'workshop', maxSessionRows, largeDatasets);
+    const purchaseRawBounded = await readBounded(database, 'purchase_raw', maxSessionRows, largeDatasets);
+    const { rows:purchaseAll, total:purchaseTotal } = purchaseBounded;
+    const { rows:scans, total:scanTotal } = scansBounded;
+    const { rows:warehouse, total:warehouseTotal } = warehouseBounded;
+    const { rows:workshop, total:workshopTotal } = workshopBounded;
+    const { rows:purchaseDetails, total:purchaseRawTotal } = purchaseRawBounded;
 
     const purchaseFiltered = filterPurchasesByProjectPrefix(purchaseAll);
     const purchase = mergePurchaseRows(purchaseFiltered.valid);
     const warningSource = purchaseDetails.length ? purchaseDetails : purchaseAll;
     const warnings = [
-      ...formatWarnings.filter(row => row.source === 'Mua Hàng'),
+      ...formatWarnings,
       ...filterPurchasesByProjectPrefix(warningSource).warnings
-    ];
+    ].filter((row, index, rows) => {
+      const key = JSON.stringify([row.source, row.sourceFile, row.sourceRow, row.note, row.original]);
+      return rows.findIndex(candidate => JSON.stringify([candidate.source, candidate.sourceFile, candidate.sourceRow, candidate.note, candidate.original]) === key) === index;
+    });
 
     onProgress?.({ phase:'comparing', cancelable:false });
     let derived = emptyComparison();
@@ -75,8 +79,14 @@ async function finalizeImport({
     }
 
     const countTables = ['purchase_raw','scan_raw','warehouse_raw','workshop_raw','purchases','scans','warehouse','workshop'];
-    const counts = {};
-    for (const table of countTables) counts[table] = await database.countTableRows(table);
+    const counts = {
+      purchase_raw:purchaseRawTotal,
+      purchases:purchaseTotal,
+      scans:scanTotal,
+      warehouse:warehouseTotal,
+      workshop:workshopTotal
+    };
+    for (const table of countTables) if (counts[table] === undefined) counts[table] = await database.countTableRows(table);
     return {
       mergedStats:merged.stats,
       counts,

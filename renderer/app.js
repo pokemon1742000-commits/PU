@@ -1,5 +1,5 @@
 const $ = s => document.querySelector(s); const $$ = s => [...document.querySelectorAll(s)];
-let state = { counts:{}, rawCounts:{}, sources:[] }, activeTable = 'comparison', rawMode = false, tableRows = [], tablePage = { page:1, pageSize:100, total:0, totalPages:1 }, auditPage = { page:1, pageSize:100, total:0, totalPages:1 }, replacementPage = 1, tableRequest = 0, searchTimer, thresholdTimer, confirmationTimer, confirmationInFlight = false, confirmationQueue = new Map(), sheetPickerFiles = [], sheetPickerResolve, lastExportPath = '', importInFlight = false;
+let state = { counts:{}, rawCounts:{}, sources:[] }, activeTable = 'comparison', rawMode = false, tableRows = [], tablePage = { page:1, pageSize:100, total:0, totalPages:1 }, auditPage = { page:1, pageSize:100, total:0, totalPages:1 }, replacementPage = 1, tableRequest = 0, searchTimer, thresholdTimer, confirmationTimer, confirmationInFlight = false, confirmationQueue = new Map(), sheetPickerFiles = [], sheetPickerResolve, lastExportPath = '', importInFlight = false, exportInFlight = false, exportUnsubscribe = null;
 const REPLACEMENT_PAGE_SIZE = 100;
 const tableLabels = { purchase:'Dữ Liệu Đặt Hàng — Sheet kiểm tra', scan:'Dữ Liệu Quét Mã — Sheet kiểm tra', warehouse:'Dữ Liệu Nhập Kho — Sheet kiểm tra', workshop:'Dữ Liệu Xưởng Gia Công — Sheet kiểm tra', jobCodes:'Job Code — Cơ sở dữ liệu tích lũy', comparison:'Xác Nhận Mã Đối Chiếu', enough:'Đủ hàng', shortage:'Thiếu hàng', excess:'Thừa hàng', warnings:'Cảnh Báo' };
 const columns = {
@@ -15,12 +15,15 @@ const columns = {
   warnings:[['stt','STT'],['projectCode','Mã dự án'],['purchaseOrder','Số PR'],['itemCode','Mã hàng'],['itemName','Tên hàng'],['quantity','Số lượng'],['sourceFile','File nguồn'],['sourceRow','Dòng'],['note','Ghi chú']]
 };
 
-async function init(){ $('#sheetOptions').innerHTML='<div class="export-single-sheet"><strong>2 sheet dữ liệu đối chiếu</strong><span>Gồm SỐ LIỆU XUẤT KHO và đối chiếu PR với PO + XGC. Chọn 1 hoặc cả 2 loại khi xuất: So sánh PU, hoặc PR vs PO + XGC.</span></div>'; applyTheme(localStorage.getItem('theme')||'default'); bind(); await refresh(await window.api.getState()); requestAnimationFrame(updateNavIndicator); }
+async function init(){ $('#sheetOptions').innerHTML='<div class="export-single-sheet"><strong>2 sheet dữ liệu đối chiếu</strong><span>Gồm SỐ LIỆU XUẤT KHO và đối chiếu PR với PO + XGC. Chọn 1 hoặc cả 2 loại khi xuất: So sánh PU, hoặc PR vs PO + XGC.</span></div>'; renderReleaseHistory(); applyTheme(localStorage.getItem('theme')||'default'); bind(); await refresh(await window.api.getState()); requestAnimationFrame(updateNavIndicator); }
+function renderReleaseHistory(){const history=$('#releaseHistory');if(!history||!Array.isArray(window.RELEASE_NOTES))return;history.innerHTML=window.RELEASE_NOTES.map(note=>`<article class="release-note" data-version="${escapeHtml(note.version)}"><h4>v${escapeHtml(note.version)} <span class="current-version-badge" hidden>Phiên bản hiện tại</span></h4><p>${escapeHtml(note.summary)}</p></article>`).join('')}
 function bind(){
   $$('.nav').forEach(b=>b.onclick=async()=>{show(b.dataset.view,b);if(b.dataset.openTable)await showTable(b.dataset.openTable)});
   $$('.load').forEach(b=>b.onclick=()=>handleLoad(b));
   $('#cancelImport').onclick=async()=>{ if($('#cancelImport').disabled)return; $('#cancelImport').disabled=true;$('#importProgressDetail').textContent='Đang dừng và xóa dữ liệu nạp dở…';await window.api.cancelImport(); };
   window.api.onImportProgress(renderImportProgress);
+  $('#cancelExport').onclick=async()=>{ if($('#cancelExport').disabled)return; $('#cancelExport').disabled=true;$('#exportProgressDetail').textContent='Đang hủy tác vụ xuất…';await window.api.cancelExport(); };
+  $('#exportProgress').onclick=event=>{if(event.target===$('#exportProgress')&&exportInFlight){closeExportProgress();window.api.cancelExport();}};
   $('#threshold').oninput=()=>{if(Number($('#confirmationThreshold').value)>=Number($('#threshold').value))$('#confirmationThreshold').value=Math.max(0,Number($('#threshold').value)-1);scheduleThresholdUpdate()};
   $('#confirmationThreshold').oninput=()=>{if(Number($('#confirmationThreshold').value)>=Number($('#threshold').value))$('#confirmationThreshold').value=Math.max(0,Number($('#threshold').value)-1);scheduleThresholdUpdate()};
   $('#cancelSheetPicker').onclick=()=>closeSheetPicker(null);
@@ -44,10 +47,14 @@ function bind(){
   $('#infoDialog').onclick=event=>{if(event.target===$('#infoDialog'))$('#infoDialog').close()};
   $('#githubLink').onclick=()=>run(()=>window.api.openExternal('https://github.com/pokemon1742000-commits/PU'),null);
   $('#exportPageBtn').onclick=openExportTypePicker;
-  $('#updateBtn').onclick=checkForUpdates;
-  $('#restoreBtn').onclick=restorePreviousVersion;
+  $('#updateBtn').onclick=()=>openVersionPicker('update');
+  $('#restoreBtn').onclick=()=>openVersionPicker('rollback');
+  $('#closeVersionPicker').onclick=closeVersionPicker;
+  $('#cancelVersionPicker').onclick=closeVersionPicker;
+  $('#versionPicker').onclick=event=>{if(event.target===$('#versionPicker'))closeVersionPicker()};
+  $('#confirmVersionPicker').onclick=installSelectedVersion;
   window.api.onUpdateStatus(renderUpdateStatus);
-  $('#clearSession').onclick=async()=>{if(confirm('Bạn có chắc muốn xóa dữ liệu Quét Mã và các xác nhận? Dữ liệu Mua Hàng, Nhập Kho và Xưởng Gia Công sẽ được giữ lại.')) await run(async()=>refresh(await window.api.clearSession()),'Đã clear phiên làm việc');};
+  $('#clearSession').onclick=async()=>{if(confirm('Bạn có chắc muốn xóa dữ liệu Quét Mã và các xác nhận? Dữ liệu Mua Hàng, Nhập Kho và Xưởng Gia Công sẽ được giữ lại.')) await run(async()=>{rawMode=false;const result=await window.api.clearSession();await refresh(result);tablePage.page=1;await loadTablePage(1)},'Đã clear phiên làm việc');};
   $('#deleteDatabase').onclick=()=>startDelete();
   $('#refreshBackups').onclick=loadBackups;
   $('#runDataAudit').onclick=runCurrentDataAudit;
@@ -100,19 +107,29 @@ async function runApplicationSelfCheck(){
   }catch(error){title.textContent='KHÔNG THỂ KIỂM TRA';title.className='self-check-fail';results.innerHTML='<div class="self-check-empty">Hãy đóng và mở lại ứng dụng rồi thử lại.</div>';toast(`Lỗi tự kiểm tra: ${error.message}`,true)}
   finally{button.disabled=false;button.textContent='Kiểm tra lại'}
 }
-async function checkForUpdates(){
-  const button=$('#updateBtn');
-  button.disabled=true;
-  try { renderUpdateStatus(await window.api.checkForUpdates()); }
-  catch(e){renderUpdateStatus({status:'error',operation:'update',message:`Cập nhật thất bại: ${e.message}`})}
+async function openVersionPicker(operation){
+  const picker=$('#versionPicker'), list=$('#versionPickerList'), summary=$('#versionPickerSummary');
+  picker.dataset.operation=operation; picker.hidden=false; list.innerHTML='<div class="self-check-empty">Đang tải danh sách phiên bản…</div>'; summary.textContent=operation==='update'?'Chọn bản mới hơn phiên bản đang dùng.':'Chọn bản cũ hơn phiên bản đang dùng.'; $('#confirmVersionPicker').disabled=true;
+  try{
+    const result=operation==='update'?await window.api.listUpdateVersions():await window.api.listRestoreVersions();
+    picker.dataset.currentVersion=result.currentVersion||'';
+    if(!result.releases?.length){list.innerHTML=`<div class="self-check-empty">${escapeHtml(result.message||'Không có phiên bản phù hợp.')}</div>`;return}
+    list.innerHTML=result.releases.map(release=>`<button type="button" class="version-picker-option${release.hasInstaller?'':' unavailable'}" data-version="${escapeHtml(release.version)}" ${release.hasInstaller?'':'disabled'}><span><strong>v${escapeHtml(release.version)}</strong><small>${escapeHtml(release.name||'')}</small></span><span class="version-picker-date">${escapeHtml(formatReleaseDate(release.publishedAt))}${release.hasInstaller?'':' · Không có Setup'}</span></button>`).join('');
+    $$('.version-picker-option:not(:disabled)').forEach(button=>button.onclick=()=>{ $$('.version-picker-option').forEach(item=>item.classList.remove('selected'));button.classList.add('selected');picker.dataset.version=button.dataset.version;$('#confirmVersionPicker').disabled=false; });
+  }catch(error){list.innerHTML=`<div class="self-check-empty">Không thể tải danh sách phiên bản: ${escapeHtml(error.message)}</div>`}
 }
-async function restorePreviousVersion(){
-  const button=$('#restoreBtn');
-  if(!confirm('Restore sẽ cài bản stable ngay trước latest từ GitHub và khởi động lại ứng dụng. Khi mở bản khác, toàn bộ dữ liệu SQLite cũ sẽ bị xóa. Bạn có muốn tiếp tục tìm bản Restore không?'))return;
-  button.disabled=true;
-  try { renderUpdateStatus(await window.api.restorePreviousVersion()); }
-  catch(e){renderUpdateStatus({status:'error',operation:'rollback',message:`Restore thất bại: ${e.message}`})}
+function closeVersionPicker(){const picker=$('#versionPicker');picker.hidden=true;picker.dataset.version='';$('#versionPickerList').innerHTML='';$('#confirmVersionPicker').disabled=true}
+async function installSelectedVersion(){
+  const picker=$('#versionPicker'), version=picker.dataset.version, operation=picker.dataset.operation;
+  if(!version||!operation)return;
+  const label=operation==='update'?'Update':'Restore';
+  if(!confirm(`${label} phiên bản v${version}? Ứng dụng sẽ khởi động lại và dữ liệu SQLite của phiên bản hiện tại sẽ được xóa.`))return;
+  closeVersionPicker();
+  try { renderUpdateStatus(operation==='update'?await window.api.installUpdateVersion(version):await window.api.installRestoreVersion(version)); }
+  catch(error){renderUpdateStatus({status:'error',operation,message:`${label} thất bại: ${error.message}`})}
 }
+function formatReleaseDate(value){if(!value)return 'Ngày chưa rõ';const date=new Date(value);return Number.isNaN(date.getTime())?'Ngày chưa rõ':date.toLocaleDateString('vi-VN')}
+
 function renderUpdateStatus(update){
   const updateButton=$('#updateBtn'),restoreButton=$('#restoreBtn');
   const busy=['checking','downloading','installing','rollback-checking','rollback-downloading','rollback-installing'].includes(update?.status);
@@ -144,6 +161,20 @@ function renderImportProgress(progress){
   const phaseLabel={rebuilding:'Đang tổng hợp dữ liệu…',refreshing:'Đang cập nhật phiên làm việc…',comparing:'Đang đối chiếu dữ liệu…',finalizing:'Đang hoàn tất dữ liệu đã nạp…'}[progress.phase];
   const detail=phaseLabel||[progress.processed ? `${Number(progress.processed).toLocaleString('vi-VN')} dòng đã đọc` : '', progress.warningCount ? `${Number(progress.warningCount).toLocaleString('vi-VN')} cảnh báo` : ''].filter(Boolean).join(' · ');
   $('#importProgressDetail').textContent=progress.detail||detail||'Dữ liệu được đọc và lưu từng lô để giảm sử dụng RAM.';
+}
+let exportProgressPercent=0;
+function renderExportProgress(progress){
+  if(!exportInFlight)return;
+  const phaseText={preparing:'Đang chuẩn bị…',comparing:'Đang đối chiếu dữ liệu…',writing:'Đang ghi báo cáo…',finalizing:'Đang hoàn tất…',complete:'Hoàn tất!'}[progress.phase]||progress.phase||'';
+  const processed=Number(progress.processed||0),total=Number(progress.total||0);
+  const percent=total>0?Math.min(100,Math.round(processed/total*100)):progress.phase==='finalizing'?95:exportProgressPercent;
+  exportProgressPercent=Math.max(exportProgressPercent,percent);
+  $('#exportProgressBar').style.width=`${exportProgressPercent}%`;
+  $('#exportProgressFile').textContent=progress.project?`${phaseText} — ${progress.project}`:phaseText;
+  $('#exportProgressRows').textContent=progress.detail||phaseText;
+  $('#exportProgressDetail').textContent=progress.detail&&progress.project
+    ?progress.detail
+    :total>0?`${processed} / ${total} dự án`:'';
 }
 
 async function handleLoad(button){
@@ -196,12 +227,30 @@ function closeExportTypePicker(){$('#exportTypePicker').hidden=true}
 function toggleExportType(button){button.setAttribute('aria-pressed',button.getAttribute('aria-pressed')==='true'?'false':'true');$('#confirmExportTypePicker').disabled=!selectedExportTypes().length}
 function selectedExportTypes(){return $$('.export-type-option[aria-pressed="true"]').map(button=>button.dataset.exportType)}
 function handleExportResult(r){if(!r.canceled){lastExportPath=r.path;$('#openExportFileBtn').hidden=false;toastActions(`Đã xuất: ${r.path}`,[{label:'Mở file xuất',onClick:()=>run(async()=>{await window.api.openExportFile(lastExportPath)},'Đã mở file xuất')},{label:'Mở thư mục chứa file',onClick:()=>run(async()=>{await window.api.showExportFileInFolder(lastExportPath)},'Đã mở thư mục chứa file')}])}}
+function closeExportProgress(){exportInFlight=false;exportProgressPercent=0;$('#exportProgress').hidden=true;$('#exportProgress').setAttribute('aria-busy','false');$('#exportProgressBar').style.width='0%';$('#cancelExport').disabled=false;$('#exportBtn').disabled=false;$('#exportPageBtn').disabled=false;if(exportUnsubscribe){exportUnsubscribe();exportUnsubscribe=null;}}
 // Tương thích ngược: nếu không truyền loại nào, gọi giống bản cũ
 // exportExcel(['comparison']) — 'comparison' không khớp 'pu' hay 'source' nên
 // exporter.js hiểu là xuất đầy đủ cả 2 sheet như hành vi trước đây.
-function exportFile(exportTypes){
-  if(!exportTypes||!exportTypes.length) return run(async()=>{const r=await window.api.exportExcel(['comparison']);handleExportResult(r)},null);
-  return run(async()=>{const r=await window.api.exportExcel(exportTypes);handleExportResult(r)},null);
+async function exportFile(exportTypes){
+  if(exportInFlight)return;
+  const types=exportTypes&&exportTypes.length?exportTypes:['comparison'];
+  exportUnsubscribe=window.api.onExportProgress(progress=>{
+    if(progress.phase==='complete')return;
+    renderExportProgress(progress);
+  });
+  exportInFlight=true;
+  $('#exportProgress').hidden=false;
+  $('#exportProgress').setAttribute('aria-busy','true');
+  $('#exportBtn').disabled=true;$('#exportPageBtn').disabled=true;
+  renderExportProgress({phase:'preparing',detail:'Đang chuẩn bị xuất…'});
+  try{
+    const r=await window.api.exportExcel(types);
+    closeExportProgress();
+    if(!r.canceled)handleExportResult(r);
+  }catch(err){
+    closeExportProgress();
+    toast(`Lỗi xuất Excel: ${err.message||String(err)}`,true);
+  }
 }
 
 async function applyThreshold(){

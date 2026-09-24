@@ -5,8 +5,10 @@ contextBridge.exposeInMainWorld('api', {
   runDataAudit: () => ipcRenderer.invoke('data-audit:run'),
   searchLoadedCode: payload => ipcRenderer.invoke('data-audit:search', payload),
   openExternal: url => ipcRenderer.invoke('external:open', url),
-  checkForUpdates: () => ipcRenderer.invoke('update:check'),
-  restorePreviousVersion: () => ipcRenderer.invoke('update:rollback'),
+  listUpdateVersions: () => ipcRenderer.invoke('update:list-versions', 'update'),
+  installUpdateVersion: version => ipcRenderer.invoke('update:install-version', 'update', version),
+  listRestoreVersions: () => ipcRenderer.invoke('update:list-versions', 'rollback'),
+  installRestoreVersion: version => ipcRenderer.invoke('update:install-version', 'rollback', version),
   onUpdateStatus: callback => {
     const listener = (_event, status) => callback(status);
     ipcRenderer.on('update:status', listener);
@@ -31,5 +33,11 @@ contextBridge.exposeInMainWorld('api', {
   restoreBackup: fileName => ipcRenderer.invoke('database:restore', fileName),
   exportExcel: sheets => ipcRenderer.invoke('export:save', sheets),
   openExportFile: filePath => ipcRenderer.invoke('export:open', filePath),
-  showExportFileInFolder: filePath => ipcRenderer.invoke('export:show-in-folder', filePath)
+  showExportFileInFolder: filePath => ipcRenderer.invoke('export:show-in-folder', filePath),
+  onExportProgress: callback => {
+    const listener = (_event, progress) => callback(progress);
+    ipcRenderer.on('export:progress', listener);
+    return () => ipcRenderer.removeListener('export:progress', listener);
+  },
+  cancelExport: () => ipcRenderer.invoke('export:cancel')
 });

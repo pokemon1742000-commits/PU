@@ -29,6 +29,25 @@ test('finalizer rebuilds imported data without returning raw rows', async t => {
   assert.equal(Object.hasOwn(result, 'rawRows'), false);
 });
 
+test('finalizer reuses bounded totals in the returned count snapshot', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'import-finalizer-counts-'));
+  const database = new Database(dir);
+  await database.init();
+  t.after(async () => { await database.close(); await fs.rm(dir, { recursive:true, force:true }); });
+  const source = { path:path.join(dir, 'purchase.xlsx'), sheets:['Data'] };
+  const importId = await database.beginRawImport('purchase', source);
+  await database.importRawBatch('purchase', [{ projectCode:'MEC1', purchaseOrder:'PR-1', itemCode:'A', quantity:1, sourceFile:'purchase.xlsx', sourceSheet:'Data', sourceRow:1 }], importId);
+  await database.commitRawImport('purchase', importId);
+  await database.close();
+
+  const result = await finalizeImport({ dataDir:dir, kind:'purchase', maxSessionRows:50 });
+  assert.equal(result.counts.purchase_raw, 1);
+  assert.equal(result.counts.purchases, 1);
+  assert.equal(result.counts.scans, 0);
+  assert.equal(result.counts.warehouse, 0);
+  assert.equal(result.counts.workshop, 0);
+});
+
 test('finalizer marks oversized datasets instead of materializing them', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'import-finalizer-large-'));
   const database = new Database(dir);

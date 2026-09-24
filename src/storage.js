@@ -177,6 +177,33 @@ class Database {
       CREATE INDEX IF NOT EXISTS scan_raw_key_index ON scan_raw(record_key);
       CREATE INDEX IF NOT EXISTS warehouse_key_index ON warehouse(record_key);
       CREATE INDEX IF NOT EXISTS workshop_key_index ON workshop(record_key);
+      CREATE INDEX IF NOT EXISTS purchase_raw_rebuild_order_index ON purchase_raw(
+        upper(trim(coalesce(json_extract(row_json, '$.purchaseOrder'), ''))),
+        upper(trim(coalesce(json_extract(row_json, '$.itemCode'), ''))), id
+      );
+      CREATE INDEX IF NOT EXISTS scan_raw_rebuild_order_index ON scan_raw(
+        upper(trim(coalesce(json_extract(row_json, '$.projectCode'), ''))),
+        upper(trim(coalesce(json_extract(row_json, '$.drawingCode'), ''))),
+        upper(trim(coalesce(json_extract(row_json, '$.manufacturer'), ''))),
+        upper(trim(coalesce(json_extract(row_json, '$.scanDate'), ''))), id
+      );
+      CREATE INDEX IF NOT EXISTS warehouse_raw_rebuild_order_index ON warehouse_raw(
+        upper(trim(coalesce(json_extract(row_json, '$.projectCode'), ''))),
+        upper(trim(coalesce(json_extract(row_json, '$.itemCode'), ''))),
+        upper(trim(coalesce(json_extract(row_json, '$.supplier'), ''))),
+        upper(trim(coalesce(json_extract(row_json, '$.poNumber'), ''))),
+        upper(trim(coalesce(json_extract(row_json, '$.dueDate'), ''))),
+        upper(trim(coalesce(json_extract(row_json, '$.deliveryDate'), ''))), id
+      );
+      CREATE INDEX IF NOT EXISTS workshop_raw_rebuild_order_index ON workshop_raw(
+        upper(trim(coalesce(json_extract(row_json, '$.projectCode'), ''))),
+        upper(trim(coalesce(json_extract(row_json, '$.itemCode'), ''))),
+        upper(trim(coalesce(json_extract(row_json, '$.purchaseRequest'), ''))),
+        upper(trim(coalesce(json_extract(row_json, '$.poNumber'), ''))),
+        upper(trim(coalesce(json_extract(row_json, '$.prDate'), ''))),
+        upper(trim(coalesce(json_extract(row_json, '$.dueDate'), ''))),
+        upper(trim(coalesce(json_extract(row_json, '$.deliveryDate'), ''))), id
+      );
       INSERT INTO meta(key, value) VALUES ('schema_version', '${SCHEMA_VERSION}') ON CONFLICT(key) DO UPDATE SET value=excluded.value;
     `);
   }
@@ -280,6 +307,86 @@ class Database {
     return rows.map(row => JSON.parse(row.row_json));
   }
 
+  tableRowsByProject(table, projectCode) {
+    this.ensureOpen();
+    if (!PAGED_TABLES.has(table)) throw new Error('Bảng dữ liệu không được phép truy vấn theo dự án.');
+    const project = norm(projectCode);
+    if (!project) return [];
+    const expression = `upper(trim(coalesce(json_extract(row_json, '$.projectCode'), '')))`;
+    // Project extraction accepts values such as "Tên dự án MEC123". Query the
+    // exact value plus substring candidates, then let the caller apply the
+    // canonical-project predicate.
+    return this.db.prepare(`SELECT row_json FROM ${table} WHERE ${expression} = ? OR ${expression} LIKE '%' || ? || '%' ORDER BY id`).all(project, project)
+      .map(row => JSON.parse(row.row_json));
+  }
+
+  projectsFromTables(tables) {
+    this.ensureOpen();
+    const allowed = (tables || []).filter(table => PAGED_TABLES.has(table));
+    if (!allowed.length) return [];
+    const expression = `upper(trim(coalesce(json_extract(row_json, '$.projectCode'), '')))`;
+    const query = allowed.map(table => `SELECT ${expression} AS project_code FROM ${table}`).join(' UNION ');
+    return this.db.prepare(`SELECT project_code FROM (${query}) WHERE project_code <> '' ORDER BY project_code`).all()
+      .map(row => row.project_code);
+  }
+
+  projectsFromTableOrder(tables) {
+    this.ensureOpen();
+    const seen = new Set();
+    const projects = [];
+    const expression = `upper(trim(coalesce(json_extract(row_json, '$.projectCode'), '')))`;
+    for (const table of (tables || []).filter(value => PAGED_TABLES.has(value))) {
+      for (const row of this.db.prepare(`SELECT ${expression} AS project_code FROM ${table} WHERE ${expression} <> '' ORDER BY id`).iterate()) {
+        if (!seen.has(row.project_code)) { seen.add(row.project_code); projects.push(row.project_code); }
+      }
+    }
+    return projects;
+  }
+
+  async readTableRowsByProject(table, projectCode) { return this.tableRowsByProject(table, projectCode); }
+
+  async readTablesGroupedByProject(tables, canonicalizeProject, onProgress) {
+    this.ensureOpen();
+    const normalizeProject = typeof canonicalizeProject === 'function'
+      ? canonicalizeProject
+      : value => norm(value);
+    const allowed = [...new Set((tables || []).filter(table => PAGED_TABLES.has(table)))];
+    const result = await Promise.all(allowed.map(async (table, index) => {
+      const byProject = new Map();
+      const entries = this.db.prepare(`SELECT row_json FROM ${table} ORDER BY id`).all();
+      for (const entry of entries) {
+        const row = JSON.parse(entry.row_json);
+        const project = text(row?.projectCode);
+        const canonical = text(normalizeProject(project));
+        if (!canonical) continue;
+        let rows = byProject.get(canonical);
+        if (!rows) {
+          rows = [];
+          byProject.set(canonical, rows);
+        }
+        rows.push(row);
+      }
+      if (typeof onProgress === 'function') onProgress({ table, processed:index + 1, total:allowed.length });
+      return { table, byProject };
+    }));
+    const grouped = new Map();
+    const seenProjects = new Set();
+    const projects = [];
+    for (const { table, byProject } of result) {
+      grouped.set(table, byProject);
+      for (const canonical of byProject.keys()) {
+        if (!seenProjects.has(canonical)) {
+          seenProjects.add(canonical);
+          projects.push(canonical);
+        }
+      }
+    }
+    return { tables: grouped, projects };
+  }
+
+  async listProjects(tables) { return this.projectsFromTables(tables); }
+  async listProjectsInTableOrder(tables) { return this.projectsFromTableOrder(tables); }
+
   read(file, fallback = []) {
     const item = Object.values(DATASETS).find(value => value.file === path.basename(file));
     if (!item) return Promise.reject(new Error(`Không hỗ trợ đọc file dữ liệu: ${file}`));
@@ -328,11 +435,25 @@ class Database {
   }
 
   async savePurchaseReplacement(projectCode, oldCode, newCode) {
-    const project = norm(projectCode), oldItemCode = norm(oldCode), newItemCode = norm(newCode);
-    if (!project || !oldItemCode || !newItemCode) throw new Error('Cần nhập đủ mã dự án, mã cũ và mã mới.');
-    if (oldItemCode === newItemCode) throw new Error('Mã mới phải khác mã cũ.');
-    const replacement = { projectCode:project, oldCode:oldItemCode, newCode:newItemCode, updatedAt:new Date().toISOString() };
-    this.upsert('purchase_code_replacements', `${project}|${oldItemCode}`, replacement);
+    return this.savePurchaseReplacements([{ projectCode, oldCode, newCode }]);
+  }
+
+  async savePurchaseReplacements(entries) {
+    this.ensureOpen();
+    const now = new Date().toISOString();
+    const replacements = (entries || []).map(entry => {
+      const project = norm(entry?.projectCode);
+      const oldItemCode = norm(entry?.oldCode);
+      const newItemCode = norm(entry?.newCode);
+      if (!project || !oldItemCode || !newItemCode) throw new Error('Cần nhập đủ mã dự án, mã cũ và mã mới.');
+      if (oldItemCode === newItemCode) throw new Error('Mã mới phải khác mã cũ.');
+      return { projectCode:project, oldCode:oldItemCode, newCode:newItemCode, updatedAt:now };
+    });
+    const statement = this.db.prepare(`INSERT INTO purchase_code_replacements(record_key,row_json) VALUES (?,?) ON CONFLICT(record_key) DO UPDATE SET row_json=excluded.row_json`);
+    const transaction = this.db.transaction(() => {
+      for (const replacement of replacements) statement.run(`${replacement.projectCode}|${replacement.oldCode}`, JSON.stringify(replacement));
+    });
+    transaction();
     return this.readPurchaseReplacements();
   }
 
@@ -434,8 +555,28 @@ class Database {
   }
 
   forEachJsonRow(table, orderBy, visit) {
-    const rows = this.db.prepare(`SELECT row_json FROM ${table} ORDER BY ${orderBy}`).all();
-    for (const entry of rows) visit(JSON.parse(entry.row_json));
+    for (const entry of this.db.prepare(`SELECT row_json FROM ${table} ORDER BY ${orderBy}`).iterate()) visit(JSON.parse(entry.row_json));
+  }
+
+  forEachJsonRowInChunks(table, orderBy, visit, chunkSize = 5000) {
+    // The source query is fully materialized once so SQLite evaluates the
+    // expensive JSON sort only once. Paging the temporary rowid keeps the
+    // connection free between writes to the merged table.
+    const tempTable = 'rebuild_source_rows';
+    this.db.exec(`DROP TABLE IF EXISTS temp.${tempTable}`);
+    this.db.exec(`CREATE TEMP TABLE ${tempTable} AS SELECT row_json FROM ${table} ORDER BY ${orderBy}`);
+    try {
+      let cursor = 0;
+      while (true) {
+        const rows = this.db.prepare(`SELECT row_json, rowid FROM temp.${tempTable} WHERE rowid > ? ORDER BY rowid LIMIT ?`).all(cursor, chunkSize);
+        if (!rows.length) break;
+        for (const entry of rows) visit(JSON.parse(entry.row_json));
+        cursor = rows[rows.length - 1].rowid;
+        if (rows.length < chunkSize) break;
+      }
+    } finally {
+      this.db.exec(`DROP TABLE IF EXISTS temp.${tempTable}`);
+    }
   }
 
   rebuildPurchasesFromRaw({ includeRows = true } = {}) {
@@ -477,7 +618,7 @@ class Database {
     };
     const transaction = this.db.transaction(() => {
       clear.run();
-      this.forEachJsonRow('purchase_raw', orderBy, accept);
+      this.forEachJsonRowInChunks('purchase_raw', orderBy, accept);
       write();
     });
     transaction();
@@ -485,11 +626,10 @@ class Database {
   }
 
   rebuildScansFromRaw({ includeRows = true } = {}) {
-    const rows = this.db.prepare(`SELECT row_json FROM scan_raw ORDER BY
-      upper(trim(coalesce(json_extract(row_json, '$.projectCode'), ''))),
+    const orderBy = `upper(trim(coalesce(json_extract(row_json, '$.projectCode'), ''))),
       upper(trim(coalesce(json_extract(row_json, '$.drawingCode'), ''))),
       upper(trim(coalesce(json_extract(row_json, '$.manufacturer'), ''))),
-      coalesce(json_extract(row_json, '$.scanDate'), ''), id`).iterate();
+      upper(trim(coalesce(json_extract(row_json, '$.scanDate'), ''))), id`;
     const insert = this.db.prepare(`INSERT INTO scans(record_key,row_json) VALUES (?,?)`);
     const clear = this.db.prepare('DELETE FROM scans');
     let current = null;
@@ -506,21 +646,21 @@ class Database {
       insert.run(this.datasetKey(row, ['projectCode','drawingCode','manufacturer','scanDate']), JSON.stringify(row));
       count++;
     };
+    const accept = row => {
+      if (row.invalidFormat) return;
+      const key = this.datasetKey(row, ['projectCode','drawingCode','manufacturer','scanDate']);
+      if (!current || current.key !== key) {
+        write();
+        current = { key, row:{ ...row }, quantity:Number(row.quantity) || 0, mergedRowCount:1, scanHistory:row.scanDate ? [{ date:row.scanDate, quantity:Number(row.quantity) || 0 }] : [] };
+        return;
+      }
+      current.quantity += Number(row.quantity) || 0;
+      current.mergedRowCount++;
+      if (row.scanDate) current.scanHistory.push({ date:row.scanDate, quantity:Number(row.quantity) || 0 });
+    };
     const transaction = this.db.transaction(() => {
       clear.run();
-      for (const entry of rows) {
-        const row = JSON.parse(entry.row_json);
-        if (row.invalidFormat) continue;
-        const key = this.datasetKey(row, ['projectCode','drawingCode','manufacturer','scanDate']);
-        if (!current || current.key !== key) {
-          write();
-          current = { key, row:{ ...row }, quantity:Number(row.quantity) || 0, mergedRowCount:1, scanHistory:row.scanDate ? [{ date:row.scanDate, quantity:Number(row.quantity) || 0 }] : [] };
-          continue;
-        }
-        current.quantity += Number(row.quantity) || 0;
-        current.mergedRowCount++;
-        if (row.scanDate) current.scanHistory.push({ date:row.scanDate, quantity:Number(row.quantity) || 0 });
-      }
+      this.forEachJsonRowInChunks('scan_raw', orderBy, accept);
       write();
     });
     transaction();
@@ -534,7 +674,7 @@ class Database {
       ? ['projectCode','itemCode','supplier','poNumber','dueDate','deliveryDate']
       : ['projectCode','itemCode','purchaseRequest','poNumber','prDate','dueDate','deliveryDate'];
     const order = fields.map(field => `upper(trim(coalesce(json_extract(row_json, '$.${field}'), '')))`);
-    const rows = this.db.prepare(`SELECT row_json FROM ${table} ORDER BY ${order.join(', ')}, id`).iterate();
+    const orderBy = `${order.join(', ')}, id`;
     const insert = this.db.prepare(`INSERT INTO ${output}(record_key,row_json) VALUES (?,?)`);
     const clear = this.db.prepare(`DELETE FROM ${output}`);
     let current = null;
@@ -554,21 +694,21 @@ class Database {
       insert.run(this.datasetKey(row, fields), JSON.stringify(row));
       count++;
     };
+    const accept = row => {
+      if (!text(row.projectCode)) return;
+      const key = this.datasetKey(row, fields);
+      if (!current || current.key !== key) {
+        write();
+        current = { key, row:{ ...row }, orderedQuantity:Number(row.orderedQuantity) || 0, receivedQuantity:Number(row.receivedQuantity) || 0, mergedRowCount:Number(row.mergedRowCount) || 1 };
+        return;
+      }
+      current.orderedQuantity += Number(row.orderedQuantity) || 0;
+      current.receivedQuantity += Number(row.receivedQuantity) || 0;
+      current.mergedRowCount += Number(row.mergedRowCount) || 1;
+    };
     const transaction = this.db.transaction(() => {
       clear.run();
-      for (const entry of rows) {
-        const row = JSON.parse(entry.row_json);
-        if (!text(row.projectCode)) continue;
-        const key = this.datasetKey(row, fields);
-        if (!current || current.key !== key) {
-          write();
-          current = { key, row:{ ...row }, orderedQuantity:Number(row.orderedQuantity) || 0, receivedQuantity:Number(row.receivedQuantity) || 0, mergedRowCount:Number(row.mergedRowCount) || 1 };
-          continue;
-        }
-        current.orderedQuantity += Number(row.orderedQuantity) || 0;
-        current.receivedQuantity += Number(row.receivedQuantity) || 0;
-        current.mergedRowCount += Number(row.mergedRowCount) || 1;
-      }
+      this.forEachJsonRowInChunks(table, orderBy, accept);
       write();
     });
     transaction();

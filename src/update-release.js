@@ -47,6 +47,21 @@ function selectPreviousRelease(releases, currentVersion) {
   return { latest, previous, reason: null };
 }
 
+function releasesForOperation(releases, currentVersion, operation) {
+  const current = normalizeVersion(currentVersion);
+  if (!current) throw new Error('Phiên bản hiện tại không hợp lệ.');
+  if (!['update', 'rollback'].includes(operation)) throw new Error('Thao tác phiên bản không hợp lệ.');
+  const direction = operation === 'update' ? 1 : -1;
+  return listStableReleases(releases).filter(release => compareVersions(release.version, current) * direction > 0);
+}
+
+function selectReleaseForOperation(releases, currentVersion, operation, version) {
+  const normalized = normalizeVersion(version);
+  if (!normalized) return null;
+  return releasesForOperation(releases, currentVersion, operation)
+    .find(release => release.version === normalized) || null;
+}
+
 function installerName(version) {
   const normalized = normalizeVersion(version);
   if (!normalized) throw new Error('Phiên bản bộ cài không hợp lệ.');
@@ -83,6 +98,8 @@ module.exports = {
   compareVersions,
   listStableReleases,
   selectPreviousRelease,
+  releasesForOperation,
+  selectReleaseForOperation,
   installerName,
   selectInstallerAsset
 };

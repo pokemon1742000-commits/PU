@@ -102,7 +102,14 @@ function runProgressWorker(entryPath, request = {}, handlers = {}, options = {})
       if (child.connected) child.disconnect();
       resolve(result);
     };
-    const onAbort = () => fail(importCancelledError());
+    const onAbort = () => {
+      if (options.cancelCode === 'EXPORT_CANCELLED') {
+        const error = new Error('Đã hủy xuất Excel.');
+        error.code = 'EXPORT_CANCELLED';
+        return fail(error);
+      }
+      fail(importCancelledError());
+    };
     if (signal?.aborted) return onAbort();
     signal?.addEventListener?.('abort', onAbort, { once:true });
     timer = setTimeout(() => fail(new Error('Tác vụ hoàn tất dữ liệu quá thời gian cho phép.')), timeoutMs);

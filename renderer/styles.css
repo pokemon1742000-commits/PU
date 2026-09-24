@@ -268,6 +268,13 @@ select {
 .release-note h4 { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; color: var(--primary-dark); font-size: 16px; }
 .release-note ul { margin-bottom: 0; }
 .current-version-badge { padding: 3px 7px; border-radius: 999px; background: var(--primary); color: #fff; font-size: 10px; font-weight: 800; }
+.version-picker-modal { width: min(620px, calc(100vw - 32px)); }
+.version-picker-list { display: grid; gap: 8px; max-height: min(52vh, 460px); overflow-y: auto; margin: 16px 0; padding-right: 4px; }
+.version-picker-option { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-muted); color: var(--text); text-align: left; cursor: pointer; }
+.version-picker-option:hover, .version-picker-option.selected { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 10%, var(--surface)); }
+.version-picker-option span:first-child { display: grid; gap: 3px; }
+.version-picker-option small, .version-picker-date { color: var(--muted); font-size: 12px; }
+.version-picker-option.unavailable { cursor: not-allowed; opacity: .58; }
 .guide-scroll { max-height: min(68vh, 690px); margin-right: -5px; padding-right: 10px; overflow-y: auto; }
 .guide-intro { margin-bottom: 18px; padding: 16px; border: 1px solid var(--line); border-radius: 16px; background: linear-gradient(135deg, var(--surface-muted), var(--surface)); }
 .guide-intro p { margin: 6px 0 12px; color: var(--muted); line-height: 1.55; }
@@ -1152,7 +1159,7 @@ select {
 
 .page-size-control {
   position: absolute;
-  right: 2px;
+  left: 2px;
   bottom: 10px;
   display: inline-flex;
   align-items: center;
@@ -1273,7 +1280,9 @@ select {
 
 .page-summary {
   position: absolute;
-  left: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 4px;
   flex: 0 0 auto;
   color: var(--muted);
   font-size: 12px;

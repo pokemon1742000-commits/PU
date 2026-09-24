@@ -27,6 +27,20 @@ test('incremental database adds, updates, and avoids duplicates', async t => {
   assert.equal(e.rows[0].supplier, 'IDEC');
 });
 
+test('bulk-saves project-scoped purchase code links in one operation', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'db-code-links-bulk-'));
+  const db = new Database(dir); await db.init();
+  t.after(async () => { await db.close(); await fs.rm(dir, { recursive:true, force:true }); });
+  const rows = await db.savePurchaseReplacements([
+    { projectCode:'aut1', oldCode:'old-01', newCode:'new-01' },
+    { projectCode:'MEC2', oldCode:'old-01', newCode:'new-02' }
+  ]);
+  assert.deepEqual(rows.map(({ projectCode, oldCode, newCode }) => ({ projectCode, oldCode, newCode })), [
+    { projectCode:'AUT1', oldCode:'OLD-01', newCode:'NEW-01' },
+    { projectCode:'MEC2', oldCode:'OLD-01', newCode:'NEW-02' }
+  ]);
+});
+
 test('persists, updates, and deletes project-scoped purchase code links', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'db-code-links-'));
   const cleanup = () => fs.rm(dir, { recursive:true, force:true });
@@ -124,6 +138,41 @@ test('persists raw imports and archives the original Excel files', async t => {
   assert.equal((await db.readSourceArchives()).length, 1);
 });
 
+test('merged scan and receipt rebuilds do not keep a read cursor open during writes', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'storage-rebuild-busy-'));
+  const db = new Database(dir);
+  await db.init();
+  t.after(async () => { await db.close(); await fs.rm(dir, { recursive:true, force:true }); });
+
+  const scanImport = await db.beginRawImport('scan', { path:'scan.xlsx', sheets:['Data'] });
+  await db.importRawBatch('scan', [
+    { projectCode:'MEC1', drawingCode:'A', manufacturer:'Maker', scanDate:'2026-09-24', quantity:1, sourceFile:'scan.xlsx', sourceSheet:'Data', sourceRow:1 },
+    { projectCode:'MEC1', drawingCode:'A', manufacturer:'Maker', scanDate:'2026-09-24', quantity:2, sourceFile:'scan.xlsx', sourceSheet:'Data', sourceRow:2 }
+  ], scanImport);
+  await db.commitRawImport('scan', scanImport);
+  const scanResult = await db.rebuildMergedFromRaw('scan', { includeRows:true });
+  assert.equal(scanResult.rows[0].quantity, 3);
+
+  const normalizedScanImport = await db.beginRawImport('scan', { path:'scan-normalized.xlsx', sheets:['Data'] });
+  await db.importRawBatch('scan', [
+    { projectCode:'MEC2', drawingCode:'B', manufacturer:'Maker', scanDate:' 2026-09-25 ', quantity:1, sourceFile:'scan-normalized.xlsx', sourceSheet:'Data', sourceRow:1 },
+    { projectCode:' mec2 ', drawingCode:' b ', manufacturer:' maker ', scanDate:'2026-09-25', quantity:2, sourceFile:'scan-normalized.xlsx', sourceSheet:'Data', sourceRow:2 }
+  ], normalizedScanImport);
+  await db.commitRawImport('scan', normalizedScanImport);
+  const normalizedScanResult = await db.rebuildMergedFromRaw('scan', { includeRows:true });
+  assert.equal(normalizedScanResult.rows.find(row => row.projectCode === 'MEC2').quantity, 3);
+
+  const warehouseImport = await db.beginRawImport('warehouse', { path:'warehouse.xlsx', sheets:['Data'] });
+  await db.importRawBatch('warehouse', [
+    { projectCode:'MEC1', itemCode:'A', supplier:'NCC', poNumber:'PO1', dueDate:'2026-09-24', deliveryDate:'2026-09-24', orderedQuantity:5, receivedQuantity:2, sourceFile:'warehouse.xlsx', sourceSheet:'Data', sourceRow:1 },
+    { projectCode:'MEC1', itemCode:'A', supplier:'NCC', poNumber:'PO1', dueDate:'2026-09-24', deliveryDate:'2026-09-24', orderedQuantity:3, receivedQuantity:1, sourceFile:'warehouse.xlsx', sourceSheet:'Data', sourceRow:2 }
+  ], warehouseImport);
+  await db.commitRawImport('warehouse', warehouseImport);
+  const warehouseResult = await db.rebuildMergedFromRaw('warehouse', { includeRows:true });
+  assert.equal(warehouseResult.rows[0].orderedQuantity, 8);
+  assert.equal(warehouseResult.rows[0].receivedQuantity, 3);
+});
+
 test('raw purchase and Job Code rows accumulate without duplicating a reimported source row', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'raw-merge-'));
   const cleanup = () => fs.rm(dir, { recursive:true, force:true });
@@ -138,6 +187,26 @@ test('raw purchase and Job Code rows accumulate without duplicating a reimported
   await db.mergeRawJobCodes([{ code:'MEC1', sourceFile:'Jobs-1.xlsx', sourceSheet:'Job code', sourceRow:5 }]);
   const jobs = await db.mergeRawJobCodes([{ code:'MEC2', sourceFile:'Jobs-2.xlsx', sourceSheet:'Job code', sourceRow:5 }]);
   assert.deepEqual(jobs.map(row => row.code), ['MEC1','MEC2']);
+});
+
+test('groups export tables by canonical project while preserving row order', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'grouped-project-'));
+  const db = new Database(dir); await db.init();
+  t.after(async () => { await db.close(); await fs.rm(dir, { recursive:true, force:true }); });
+  await db.mergePurchases([
+    { projectCode:'Project MEC1', itemCode:'A', purchaseOrder:'PR-A', quantity:1 },
+    { projectCode:'AUT2', itemCode:'B', purchaseOrder:'PR-B', quantity:2 }
+  ]);
+  await db.mergeScans([{ projectCode:'MEC1', drawingCode:'A', quantity:1 }]);
+  await db.mergeWarehouse([{ projectCode:'Tên dự án MEC1', itemCode:'A', orderedQuantity:1, receivedQuantity:1 }]);
+  const grouped = await db.readTablesGroupedByProject(['purchases', 'scans', 'warehouse'], value => {
+    const match = String(value || '').toUpperCase().match(/(?:MEC|AUT)[A-Z0-9]*/);
+    return match ? match[0] : String(value || '').trim().toUpperCase();
+  });
+  assert.deepEqual(grouped.projects, ['MEC1', 'AUT2']);
+  assert.deepEqual(grouped.tables.get('purchases').get('MEC1').map(row => row.itemCode), ['A']);
+  assert.equal(grouped.tables.get('scans').get('MEC1')[0].drawingCode, 'A');
+  assert.equal(grouped.tables.get('warehouse').get('MEC1')[0].receivedQuantity, 1);
 });
 
 test('raw table paging counts, searches, and preserves stable order', async t => {
@@ -220,7 +289,9 @@ test('scan clears with the working session while warehouse and workshop remain l
   await db.writeWorkingSession({
     sources:[{ kind:'scan', file:'scan.xlsx' }, { kind:'warehouse', file:'warehouse.xlsx' }, { kind:'workshop', file:'xgc.xlsx' }],
     formatWarnings:[{ source:'Quét Mã', note:'scan' }, { source:'Nhập Kho', note:'warehouse' }, { source:'Xưởng Gia Công', note:'workshop' }],
-    decisions:[['MEC1|A-01', { action:'ignored' }]]
+    decisions:[['MEC1|A-01', { action:'ignored' }]],
+    autoThreshold:87,
+    confirmationThreshold:81
   });
   assert.equal((await db.readWorkingSession()).sources.length, 3);
 
@@ -233,7 +304,9 @@ test('scan clears with the working session while warehouse and workshop remain l
   assert.equal((await db.readRawWorkshop())[0].receivedQuantity, 1);
   assert.deepEqual(await db.readWorkingSession(), {
     sources:[{ kind:'warehouse', file:'warehouse.xlsx' }, { kind:'workshop', file:'xgc.xlsx' }],
-    formatWarnings:[{ source:'Nhập Kho', note:'warehouse' }, { source:'Xưởng Gia Công', note:'workshop' }]
+    formatWarnings:[{ source:'Nhập Kho', note:'warehouse' }, { source:'Xưởng Gia Công', note:'workshop' }],
+    autoThreshold:87,
+    confirmationThreshold:81
   });
 
   await db.backupAndClear();
