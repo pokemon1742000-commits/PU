@@ -1,6 +1,6 @@
 {
   "name": "doi-chieu-du-lieu",
-  "version": "1.0.30",
+  "version": "1.0.31",
   "description": "Ứng dụng đối chiếu dữ liệu mua hàng, quét mã và nhập kho",
   "repository": {
     "type": "git",
@@ -17,11 +17,11 @@
     "rebuild:node": "node scripts/rebuild-native.js node",
     "rebuild:electron": "node scripts/rebuild-native.js electron",
     "prepare:electron-native": "npm run rebuild:electron && node scripts/verify-native.js electron",
-    "test": "node --test test/data-audit.test.js test/exporter.test.js test/file-runner.test.js test/native-runtime.test.js test/processor.test.js test/self-check.test.js test/storage.test.js test/storage-migration.test.js test/update-release.test.js test/version-data.test.js test/ui.test.js",
+    "test": "node --test test/data-audit.test.js test/exporter.test.js test/file-runner.test.js test/import-finalizer.test.js test/native-runtime.test.js test/processor.test.js test/self-check.test.js test/storage.test.js test/storage-migration.test.js test/update-release.test.js test/version-data.test.js test/ui.test.js",
     "verify": "node scripts/self-check.js",
     "verify:packaged": "node scripts/verify-native.js packaged",
     "predist": "npm run prepare:electron-native",
-    "check": "node --check main.js && node --check preload.js && node --check src/processor.js && node --check src/file-worker.js && node --check src/exporter.js && node --check src/storage.js && node --check src/data-audit.js && node --check src/self-check.js && node --check src/update-release.js && node --check src/version-data.js && node --check renderer/app.js && node --check scripts/self-check.js && node --check scripts/rebuild-native.js && node --check scripts/verify-native.js && node --check scripts/probe-native.js && node --check scripts/guide-preload.js && node --check scripts/generate-guide-images.js",
+    "check": "node --check main.js && node --check preload.js && node --check src/processor.js && node --check src/xlsx-inspector.js && node --check src/file-worker.js && node --check src/import-finalizer.js && node --check src/import-finalizer-worker.js && node --check src/raw-import-runner.js && node --check src/raw-import-worker.js && node --check src/exporter.js && node --check src/storage.js && node --check src/data-audit.js && node --check src/self-check.js && node --check src/update-release.js && node --check src/version-data.js && node --check renderer/app.js && node --check scripts/self-check.js && node --check scripts/rebuild-native.js && node --check scripts/verify-native.js && node --check scripts/probe-native.js && node --check scripts/guide-preload.js && node --check scripts/generate-guide-images.js",
     "dist": "electron-builder --win portable --x64 --config.npmRebuild=false",
     "publish": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish.ps1",
     "release:auto": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-auto.ps1"
@@ -30,7 +30,9 @@
     "better-sqlite3": "^11.10.0",
     "electron-updater": "^6.8.9",
     "exceljs": "^4.4.0",
-    "fuzzball": "^2.2.3"
+    "fuzzball": "^2.2.3",
+    "saxes": "^5.0.1",
+    "unzipper": "^0.12.5"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",

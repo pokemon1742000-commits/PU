@@ -434,14 +434,8 @@ class Database {
   }
 
   forEachJsonRow(table, orderBy, visit) {
-    const statement = this.db.prepare(`SELECT row_json FROM ${table} ORDER BY ${orderBy} LIMIT ? OFFSET ?`);
-    const pageSize = 500;
-    for (let offset = 0;; offset += pageSize) {
-      const page = statement.all(pageSize, offset);
-      if (!page.length) return;
-      for (const entry of page) visit(JSON.parse(entry.row_json));
-      if (page.length < pageSize) return;
-    }
+    const rows = this.db.prepare(`SELECT row_json FROM ${table} ORDER BY ${orderBy}`).all();
+    for (const entry of rows) visit(JSON.parse(entry.row_json));
   }
 
   rebuildPurchasesFromRaw({ includeRows = true } = {}) {

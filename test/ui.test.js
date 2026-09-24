@@ -77,11 +77,16 @@ test('workshop import exposes the XGC button, table, mapping, and raw-data view'
 
 test('imports stream into SQLite with staging, progress, cancellation, and durable source data', () => {
   assert.match(main, /runStreamingFileParser/);
-  assert.match(main, /database\.beginRawImport\(kind, source\)/);
-  assert.match(main, /database\.importRawBatch\(kind, rows, importId\)/);
-  assert.match(main, /database\.commitRawImport\(kind, importId\)/);
-  assert.match(main, /database\.discardRawImport\(importId\)/);
-  assert.match(main, /database\.rebuildMergedFromRaw\(kind, \{ includeRows:false \}\)/);
+  assert.match(main, /createRawImportWorker\(database\.dir\)/);
+  assert.match(main, /rawImportWorker\.beginRawImport\(kind, source\)/);
+  assert.match(main, /rawImportWorker\.importRawBatch\(kind, rows, importId\)/);
+  assert.match(main, /rawImportWorker\.commitRawImport\(kind, importId\)/);
+  assert.match(main, /rawImportWorker\.discardRawImport\(importId\)/);
+  assert.match(main, /await rawImportWorker\.close\(\)/);
+  assert.match(main, /runProgressWorker/);
+  assert.match(main, /phase:'finalizing'/);
+  assert.match(main, /cancelable:false/);
+  assert.doesNotMatch(main, /database\.rebuildMergedFromRaw\(kind, \{ includeRows:false \}\)/);
   assert.match(main, /ipcMain\.handle\('files:cancel'/);
   assert.match(preload, /cancelImport:.*files:cancel/);
   assert.match(preload, /onImportProgress/);

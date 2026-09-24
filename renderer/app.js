@@ -19,7 +19,7 @@ async function init(){ $('#sheetOptions').innerHTML='<div class="export-single-s
 function bind(){
   $$('.nav').forEach(b=>b.onclick=async()=>{show(b.dataset.view,b);if(b.dataset.openTable)await showTable(b.dataset.openTable)});
   $$('.load').forEach(b=>b.onclick=()=>handleLoad(b));
-  $('#cancelImport').onclick=async()=>{ $('#cancelImport').disabled=true;$('#importProgressDetail').textContent='Đang dừng và xóa dữ liệu nạp dở…';await window.api.cancelImport(); };
+  $('#cancelImport').onclick=async()=>{ if($('#cancelImport').disabled)return; $('#cancelImport').disabled=true;$('#importProgressDetail').textContent='Đang dừng và xóa dữ liệu nạp dở…';await window.api.cancelImport(); };
   window.api.onImportProgress(renderImportProgress);
   $('#threshold').oninput=()=>{if(Number($('#confirmationThreshold').value)>=Number($('#threshold').value))$('#confirmationThreshold').value=Math.max(0,Number($('#threshold').value)-1);scheduleThresholdUpdate()};
   $('#confirmationThreshold').oninput=()=>{if(Number($('#confirmationThreshold').value)>=Number($('#threshold').value))$('#confirmationThreshold').value=Math.max(0,Number($('#threshold').value)-1);scheduleThresholdUpdate()};
@@ -132,15 +132,18 @@ function setImportBusy(busy){
   $$('.load').forEach(button=>button.disabled=busy);
   document.body.style.cursor=busy?'progress':'';
   $('#importProgress').hidden=!busy;
-  $('#cancelImport').disabled=false;
+  $('#cancelImport').disabled=!busy;
 }
 
 function renderImportProgress(progress){
   if(!importInFlight)return;
-  $('#importProgressFile').textContent=progress.file?`Đang đọc: ${progress.file}`:'Đang đọc file Excel…';
+  const finalizing=['rebuilding','refreshing','comparing','finalizing'].includes(progress.phase);
+  $('#cancelImport').disabled=progress.cancelable===false||finalizing;
+  $('#importProgressFile').textContent=finalizing?'Đang hoàn tất dữ liệu…':progress.file?`Đang đọc: ${progress.file}`:'Đang đọc file Excel…';
   $('#importProgressRows').textContent=`${Number(progress.loaded||0).toLocaleString('vi-VN')} dòng đã lưu tạm`;
-  const detail=[progress.processed ? `${Number(progress.processed).toLocaleString('vi-VN')} dòng đã đọc` : '', progress.warningCount ? `${Number(progress.warningCount).toLocaleString('vi-VN')} cảnh báo` : ''].filter(Boolean).join(' · ');
-  $('#importProgressDetail').textContent=detail||'Dữ liệu được đọc và lưu từng lô để giảm sử dụng RAM.';
+  const phaseLabel={rebuilding:'Đang tổng hợp dữ liệu…',refreshing:'Đang cập nhật phiên làm việc…',comparing:'Đang đối chiếu dữ liệu…',finalizing:'Đang hoàn tất dữ liệu đã nạp…'}[progress.phase];
+  const detail=phaseLabel||[progress.processed ? `${Number(progress.processed).toLocaleString('vi-VN')} dòng đã đọc` : '', progress.warningCount ? `${Number(progress.warningCount).toLocaleString('vi-VN')} cảnh báo` : ''].filter(Boolean).join(' · ');
+  $('#importProgressDetail').textContent=progress.detail||detail||'Dữ liệu được đọc và lưu từng lô để giảm sử dụng RAM.';
 }
 
 async function handleLoad(button){

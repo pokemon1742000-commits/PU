@@ -795,4 +795,55 @@ test('isolated Excel parsers run sequentially', async t => {
   assert.equal(result.details[0].sourceSheet, 'Job code');
   assert.equal(result.rows.includes('MEC1808001'), true);
  });
+
+ await t.test('inspects multi-sheet workbooks and counts actual value rows across formats and buffers', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'inspect-sheets-'));
+  t.after(() => fs.rm(dir, { recursive:true, force:true }));
+  const file = path.join(dir, 'test-inspect.xlsx');
+  const wb = new ExcelJS.Workbook();
+  const ws1 = wb.addWorksheet('SheetA');
+  ws1.addRow(['Col1', 'Col2']);
+  ws1.addRow(['Val1', 123]);
+  ws1.addRow([]);
+  ws1.addRow([{ formula: '1+1', result: 2 }]);
+  const ws2 = wb.addWorksheet('SheetB');
+  ws2.addRow(['OnlyHeader']);
+  ws2.getCell('A100').font = { italic: true };
+  await wb.xlsx.writeFile(file);
+
+  const sheets = await listWorkbookSheets(file);
+  assert.deepEqual(sheets, [
+    { name: 'SheetA', rowCount: 3 },
+    { name: 'SheetB', rowCount: 1 }
+  ]);
+
+  const buf = await fs.readFile(file);
+  const sheetsFromBuf = await listWorkbookSheets(buf);
+  assert.deepEqual(sheetsFromBuf, [
+    { name: 'SheetA', rowCount: 3 },
+    { name: 'SheetB', rowCount: 1 }
+  ]);
+ });
+
+ await t.test('limits pre-marker pending scan rows when exceeding 10,000 threshold', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'scan-marker-overflow-'));
+  t.after(() => fs.rm(dir, { recursive:true, force:true }));
+  const file = path.join(dir, 'scan-overflow.xlsx');
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Data');
+  for (let i = 1; i <= 10005; i++) {
+    ws.addRow([`AUTM260552, ITEM-${i}, 1, PMA, NK-1, 20/05/2026, REF`]);
+  }
+  ws.addRow(['15/Aug']);
+  ws.addRow(['AUTM260552, ITEM-POST, 1, PMA, NK-1, 20/05/2026, REF']);
+  await wb.xlsx.writeFile(file);
+  const result = await processWithWorker('scan', file);
+  assert.equal(result.rows.length, 10006);
+  const overflowed = result.rows.slice(0, 5);
+  overflowed.forEach(r => assert.equal(r.scanDate, 'Chưa có ngày quét mã'));
+  assert.equal(result.rows[5].scanDate, 'Trước 15/Aug');
+  assert.equal(result.rows[10004].scanDate, 'Trước 15/Aug');
+  assert.equal(result.rows[10005].scanDate, '15/Aug');
+  assert.ok(result.warnings.some(w => w.note.includes('Vượt giới hạn 10000 dòng chờ')));
+ });
 });

@@ -5,7 +5,8 @@ const fileSystem = require('fs');
 const https = require('https');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
-const { runFileParser, runStreamingFileParser } = require('./src/file-runner');
+const { runFileParser, runProgressWorker, runStreamingFileParser } = require('./src/file-runner');
+const { createRawImportWorker } = require('./src/raw-import-runner');
 const { autoUpdater } = require('electron-updater');
 const { buildComparison, resolveReview, filterPurchasesByProjectPrefix, prioritizeProjectWarnings, mergePurchaseRows, mergeWarehouseRows, mergeWorkshopRows } = require('./src/processor');
 const { exportWorkbook, EXPORT_TYPES } = require('./src/exporter');
@@ -30,6 +31,7 @@ const MAX_SESSION_ROWS = 50000;
 const BUILT_IN_JOB_CODE_FILE = path.join(app.isPackaged ? process.resourcesPath : __dirname, 'assets', 'MKAC Monthly Timesheet.xlsx');
 let builtInJobCodeReference;
 let activeImport = null;
+let activeLoadPromise = null;
 const MAX_FORMAT_WARNINGS = 2000;
 
 app.commandLine.appendSwitch('js-flags', '--max-old-space-size=4096');
@@ -147,7 +149,13 @@ app.on('before-quit', async event => {
   if (isQuitting) return;
   isQuitting = true;
   event.preventDefault();
-  try { await database?.close(); } finally { app.quit(); }
+  try {
+    if (activeImport) {
+      activeImport.controller.abort();
+      await activeLoadPromise?.catch(() => {});
+    }
+    await database?.close();
+  } finally { app.quit(); }
 });
 app.on('window-all-closed', () => process.platform !== 'darwin' && app.quit());
 
@@ -193,9 +201,17 @@ function registerIpc() {
     }
     return { canceled: false, files };
   });
-  ipcMain.handle('files:load', async (_e, kind, selections) => serializeMutation(() => load(kind, selections)));
+  ipcMain.handle('files:load', async (_e, kind, selections) => {
+    const pending = serializeMutation(() => load(kind, selections));
+    activeLoadPromise = pending;
+    pending.then(
+      () => { if (activeLoadPromise === pending) activeLoadPromise = null; },
+      () => { if (activeLoadPromise === pending) activeLoadPromise = null; }
+    );
+    return pending;
+  });
   ipcMain.handle('files:cancel', async () => {
-    if (!activeImport) return false;
+    if (!activeImport || activeImport.phase === 'finalizing') return false;
     activeImport.controller.abort();
     return true;
   });
@@ -303,25 +319,29 @@ function sendImportProgress(progress) {
 async function load(kind, selections) {
   if (activeImport) throw new Error('Đang có một tác vụ nạp dữ liệu khác.');
   const controller = new AbortController();
-  activeImport = { controller, kind };
   const fileErrors = [];
   const successfulFiles = [];
   const warnings = [];
   let warningCount = 0;
   let loaded = 0;
+  let rawImportWorker;
+  activeImport = { controller, kind, phase:'staging', rawImportWorker:null };
   try {
+    rawImportWorker = createRawImportWorker(database.dir);
+    activeImport.rawImportWorker = rawImportWorker;
+
     for (const source of selections || []) {
       if (controller.signal.aborted) throw new Error('Đã hủy nạp dữ liệu.');
       let importId;
       try {
-        importId = await database.beginRawImport(kind, source);
+        importId = await rawImportWorker.beginRawImport(kind, source);
         const result = await runStreamingFileParser(
           path.join(__dirname, 'src', 'file-worker.js'),
           { kind, source, batchSize:500 },
           {
             onBatch: async (rows, batchWarnings, progress) => {
               if (controller.signal.aborted) throw new Error('Đã hủy nạp dữ liệu.');
-              await database.importRawBatch(kind, rows, importId);
+              await rawImportWorker.importRawBatch(kind, rows, importId);
               loaded += rows.length;
               warningCount += batchWarnings.length;
               if (warnings.length < MAX_FORMAT_WARNINGS) warnings.push(...batchWarnings.slice(0, MAX_FORMAT_WARNINGS - warnings.length));
@@ -330,41 +350,68 @@ async function load(kind, selections) {
           },
           { signal:controller.signal }
         );
-        await database.commitRawImport(kind, importId);
+        await rawImportWorker.commitRawImport(kind, importId);
         importId = null;
         successfulFiles.push(source.path);
         sendImportProgress({ kind, file:path.basename(source.path), complete:true, ...result, loaded, warningCount });
       } catch (error) {
-        if (importId) await database.discardRawImport(importId);
+        if (importId) await rawImportWorker.discardRawImport(importId);
         if (error?.code === 'IMPORT_CANCELLED' || controller.signal.aborted) throw error;
         fileErrors.push({ file:parserFileName(source), message:error.message || String(error) });
       }
     }
+    await rawImportWorker.close();
+    rawImportWorker = null;
+    activeImport.rawImportWorker = null;
     if (!successfulFiles.length) {
       const detail = fileErrors.map(error => `${error.file}: ${error.message}`).join('; ');
       throw new Error(`Không thể đọc file ${kind === 'warehouse' ? 'Nhập Kho' : 'Excel'}: ${detail}`);
     }
 
-    const merged = await database.rebuildMergedFromRaw(kind, { includeRows:false });
-    if (kind === 'purchase') session.purchaseAll = await readRowsForSession('purchases');
-    else if (kind === 'scan') session.scans = await readRowsForSession('scans');
-    else if (kind === 'warehouse') session.warehouse = await readRowsForSession('warehouse');
-    else if (kind === 'workshop') session.workshop = await readRowsForSession('workshop');
+    activeImport.phase = 'finalizing';
+    sendImportProgress({ kind, phase:'finalizing', cancelable:false, loaded, warningCount, detail:'Đang hoàn tất dữ liệu đã nạp…' });
+    await database.close();
+    let finalized;
+    try {
+      finalized = await runProgressWorker(
+        path.join(__dirname, 'src', 'import-finalizer-worker.js'),
+        {
+          dataDir:database.dir,
+          kind,
+          maxSessionRows:MAX_SESSION_ROWS,
+          formatWarnings:warnings,
+          decisions:[...(session.decisions || new Map()).entries()],
+          comparisonThreshold,
+          confirmationThreshold,
+          purchaseReplacements:session.purchaseReplacements
+        },
+        { onProgress:progress => sendImportProgress({ kind, loaded, warningCount, ...progress }) },
+        { signal:controller.signal }
+      );
+    } catch (error) {
+      if (error?.code === 'IMPORT_CANCELLED') throw error;
+      throw new Error(`Đã lưu dữ liệu gốc nhưng chưa thể hoàn tất bảng tổng hợp: ${error.message || String(error)}`);
+    } finally {
+      await database.init();
+    }
 
+    const patch = finalized.sessionPatch || {};
+    Object.assign(session, patch);
+    session.largeDatasets = new Set(patch.largeDatasets || []);
     session.formatWarnings.push(...warnings);
     if (warningCount > warnings.length) session.formatWarnings.push({ source:'Hệ thống', note:`Đã ghi nhận thêm ${warningCount - warnings.length} cảnh báo định dạng; chỉ giữ ${MAX_FORMAT_WARNINGS} cảnh báo mới nhất trong phiên này.` });
-    await refreshValidatedSession();
     session.sources.push(...successfulFiles.map(filePath => ({ kind, file:path.basename(filePath), path:filePath, loadedAt:new Date().toISOString() })));
     await Promise.all([
       kind === 'purchase' ? database.archiveSourceFiles(kind, successfulFiles) : Promise.resolve(),
       saveWorkingSession()
     ]);
-    autoCompareWhenReady();
+    sendImportProgress({ kind, phase:'complete', cancelable:false, loaded, warningCount });
     return {
       ...(await summary()),
-      loadStats:{ loaded, total:merged.stats.total, fileErrors, warningCount }
+      loadStats:{ loaded, total:finalized.mergedStats?.total || 0, fileErrors, warningCount }
     };
   } finally {
+    if (rawImportWorker) await rawImportWorker.close().catch(() => {});
     activeImport = null;
   }
 }
@@ -438,7 +485,7 @@ function processSingleFileInWorker(kind, source) {
 }
 
 function inspectFileInWorker(filePath) {
-  return runFileParser(path.join(__dirname, 'src', 'file-worker.js'), { action: 'inspect', filePath });
+  return runFileParser(path.join(__dirname, 'src', 'file-worker.js'), { action: 'inspect', filePath }, { heapLimitMb: 512 });
 }
 
 function parserFileName(source) {

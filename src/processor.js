@@ -1,5 +1,7 @@
 const ExcelJS = require('exceljs');
 const fuzz = require('fuzzball');
+const { inspectWorkbookSheets } = require('./xlsx-inspector');
+const MAX_PENDING_SCAN_ROWS = 10000;
 const basename = value => String(value?.name || value || '').split(/[\\/]/).pop();
 
 const clean = v => String(v ?? '').trim();
@@ -54,14 +56,7 @@ async function* streamWorkbookSheets(file, selectedSheets) {
 }
 
 async function listWorkbookSheets(file) {
-  // Some workbooks contain a styled cell at Excel's final row. ExcelJS's streaming
-  // reader cannot resolve that malformed/oversized relationship reliably, while the
-  // non-streaming reader can inspect sheet metadata without materializing all rows.
-  const workbook = new ExcelJS.Workbook();
-  const options = { ignoreNodes: ['dataValidations','hyperlinks','printOptions','pageMargins','pageSetup','headerFooter','drawing','picture','sheetProtection','conditionalFormatting','extLst'] };
-  if (typeof file === 'string') await workbook.xlsx.readFile(file, options);
-  else await workbook.xlsx.load(file instanceof ArrayBuffer ? new Uint8Array(file) : file, options);
-  return workbook.worksheets.map(worksheet => ({ name:worksheet.name, rowCount:worksheet.actualRowCount }));
+  return inspectWorkbookSheets(file);
 }
 function worksheetRows(worksheet) {
   const rows = [];
@@ -287,8 +282,16 @@ async function processScans(files) {
         else if (!p3num && p4num) { quantity = number(normalized[3]); manufacturer = normalized[2]; }
         else { quantity = number(normalized[2]); manufacturer = normalized[3]; manualReview = true; warnings.push(warning('Quét Mã', normalized[0], normalized[1], `${ws.name || 'Sheet'} dòng ${r.rowNo}: không xác định được thứ tự số lượng/NXS`, file)); }
         const parsed = { projectCode: canonicalProject(normalized[0]), drawingCode: normalized[1], quantity, manufacturer, receiptCode: normalized[4], warehouseDate: parseDmyDate(normalized[5]), reference: normalized[6], scanDate: currentScanMarker?.display || '', scanDateSort: currentScanMarker?.sort || '', manualReview, sourceFile: basename(sourceName || file), sourceSheet: ws.name || '', sourceRow: r.rowNo };
-        if (!firstMarkerSeen) pendingBeforeFirstMarker.push(parsed);
-        else addParsed(parsed);
+        if (!firstMarkerSeen) {
+          pendingBeforeFirstMarker.push(parsed);
+          if (pendingBeforeFirstMarker.length > MAX_PENDING_SCAN_ROWS) {
+            const overflow = pendingBeforeFirstMarker.splice(0, pendingBeforeFirstMarker.length - MAX_PENDING_SCAN_ROWS);
+            overflow.forEach(row => addParsed({ ...row, scanDate: 'Chưa có ngày quét mã', scanDateSort: '' }));
+            warnings.push(warning('Quét Mã', '', '', `Vượt giới hạn ${MAX_PENDING_SCAN_ROWS} dòng chờ trước ngày quét mã đầu tiên; các dòng trước được gán Chưa có ngày quét mã`, file));
+          }
+        } else {
+          addParsed(parsed);
+        }
       }
       if (!firstMarkerSeen) pendingBeforeFirstMarker.forEach(row => addParsed({ ...row, scanDate: 'Chưa có ngày quét mã', scanDateSort: '' }));
     }
@@ -670,8 +673,16 @@ async function streamFileRows(kind, source, onBatch, { batchSize = 500 } = {}) {
     else if (!p3num && p4num) { quantity = number(normalized[3]); manufacturer = normalized[2]; }
     else { quantity = number(normalized[2]); manufacturer = normalized[3]; manualReview = true; await addWarning(warning('Quét Mã', normalized[0], normalized[1], `${worksheet.name || 'Sheet'} dòng ${r.rowNo}: không xác định được thứ tự số lượng/NXS`, file)); }
     const parsed = { projectCode:canonicalProject(normalized[0]), drawingCode:normalized[1], quantity, manufacturer, receiptCode:normalized[4], warehouseDate:parseDmyDate(normalized[5]), reference:normalized[6], scanDate:currentScanMarker?.display || '', scanDateSort:currentScanMarker?.sort || '', manualReview, sourceFile:basename(sourceName || file), sourceSheet:worksheet.name || '', sourceRow:r.rowNo };
-    if (!firstScanMarkerSeen) pendingBeforeFirstMarker.push(parsed);
-    else await addScan(parsed);
+    if (!firstScanMarkerSeen) {
+      pendingBeforeFirstMarker.push(parsed);
+      if (pendingBeforeFirstMarker.length > MAX_PENDING_SCAN_ROWS) {
+        const overflow = pendingBeforeFirstMarker.splice(0, pendingBeforeFirstMarker.length - MAX_PENDING_SCAN_ROWS);
+        for (const row of overflow) await addScan({ ...row, scanDate:'Chưa có ngày quét mã', scanDateSort:'' });
+        await addWarning(warning('Quét Mã', '', '', `Vượt giới hạn ${MAX_PENDING_SCAN_ROWS} dòng chờ trước ngày quét mã đầu tiên; các dòng trước được gán Chưa có ngày quét mã`, file));
+      }
+    } else {
+      await addScan(parsed);
+    }
   };
 
   for await (const worksheet of streamWorkbookSheets(file, sheets)) {
@@ -871,9 +882,9 @@ function gcSuffixMatch(target, rows, field) {
 
 function matchSource(source, scan, rows, field, threshold, decisions, confirmationThreshold) {
   const drawingCode = norm(scan.drawingCode);
+  const exactRow = (rows || []).find(row => norm(row[field]) === drawingCode);
+  if (exactRow) return { code: drawingCode, score: 100, kind: 'exact', options:[{ code:drawingCode, score:100 }] };
   const options = candidateOptions(scan.drawingCode, rows, field);
-  const exact = options.find(option => option.code === drawingCode);
-  if (exact) return { code: exact.code, score: 100, kind: 'exact', options:[exact] };
   const suffixMatch = gcSuffixMatch(scan.drawingCode, rows, field);
   if (suffixMatch) {
     const option = { code:norm(suffixMatch[field]), score:100 };

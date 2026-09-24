@@ -68,6 +68,66 @@ function importCancelledError() {
   return error;
 }
 
+function runProgressWorker(entryPath, request = {}, handlers = {}, options = {}) {
+  const heapLimit = Number(options.heapLimitMb) || 768;
+  const timeoutMs = Number(options.timeoutMs) || DEFAULT_TIMEOUT_MS;
+  const signal = options.signal;
+  return new Promise((resolve, reject) => {
+    const child = fork(entryPath, [], {
+      env:{ ...process.env, ELECTRON_RUN_AS_NODE:'1' },
+      execArgv:[`--max-old-space-size=${heapLimit}`],
+      stdio:['ignore','ignore','ignore','ipc']
+    });
+    let settled = false;
+    let timer;
+    const stop = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener?.('abort', onAbort);
+      child.removeAllListeners();
+      if (child.connected) child.disconnect();
+      if (!child.killed) child.kill();
+    };
+    const fail = error => {
+      if (settled) return;
+      settled = true;
+      stop();
+      reject(error);
+    };
+    const done = result => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener?.('abort', onAbort);
+      child.removeAllListeners();
+      if (child.connected) child.disconnect();
+      resolve(result);
+    };
+    const onAbort = () => fail(importCancelledError());
+    if (signal?.aborted) return onAbort();
+    signal?.addEventListener?.('abort', onAbort, { once:true });
+    timer = setTimeout(() => fail(new Error('Tác vụ hoàn tất dữ liệu quá thời gian cho phép.')), timeoutMs);
+    timer.unref?.();
+    child.once('error', fail);
+    child.once('exit', (code, exitSignal) => {
+      if (settled) return;
+      const reason = exitSignal ? `tín hiệu ${exitSignal}` : `mã lỗi ${code ?? 'không xác định'}`;
+      fail(new Error(`Tiến trình hoàn tất dữ liệu đã dừng với ${reason}.`));
+    });
+    child.on('message', message => {
+      if (message?.type === 'progress') {
+        Promise.resolve(handlers.onProgress?.(message.progress || {})).catch(fail);
+      } else if (message?.type === 'completed') {
+        done(message.result || {});
+      } else if (message?.type === 'failed') {
+        fail(new Error(message.error || 'Tiến trình hoàn tất dữ liệu trả về lỗi không xác định.'));
+      }
+    });
+    try {
+      child.send(request, error => error && fail(error));
+    } catch (error) { fail(error); }
+  });
+}
+
 function runStreamingFileParser(entryPath, request = {}, handlers = {}, options = {}) {
   const heapLimit = Number(options.heapLimitMb) || 768;
   const timeoutMs = Number(options.timeoutMs) || DEFAULT_TIMEOUT_MS;
@@ -147,4 +207,4 @@ function runStreamingFileParser(entryPath, request = {}, handlers = {}, options 
   });
 }
 
-module.exports = { runFileParser, runStreamingFileParser, DEFAULT_HEAP_LIMIT, DEFAULT_TIMEOUT_MS };
+module.exports = { runFileParser, runProgressWorker, runStreamingFileParser, DEFAULT_HEAP_LIMIT, DEFAULT_TIMEOUT_MS };
